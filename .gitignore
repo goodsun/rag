@@ -1,0 +1,13 @@
+# 取得データ・生成物
+data/raw/
+data/chunks/
+chroma_db/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+venv/
+
+# OS
+.DS_Store
