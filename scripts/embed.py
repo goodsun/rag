@@ -1,21 +1,37 @@
 #!/usr/bin/env python3
-"""チャンクをChromaDBに格納する"""
+"""チャンクをChromaDBに格納する（多言語Embeddingモデル使用）"""
 
 import json
 from pathlib import Path
 
 import chromadb
+from fastembed import TextEmbedding
 
 CHUNKS_FILE = Path(__file__).parent.parent / "data" / "chunks" / "all_chunks.json"
 CHROMA_DIR = Path(__file__).parent.parent / "chroma_db"
 COLLECTION_NAME = "note_articles"
-BATCH_SIZE = 100  # ChromaDBのadd上限対策
+EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+BATCH_SIZE = 100
+
+
+class FastEmbedFunction(chromadb.EmbeddingFunction):
+    """fastembed を ChromaDB の embedding_function として使うラッパー"""
+
+    def __init__(self, model_name: str):
+        self.model = TextEmbedding(model_name)
+
+    def __call__(self, input: list[str]) -> list[list[float]]:
+        return [e.tolist() for e in self.model.embed(input)]
 
 
 def main():
     # チャンク読み込み
     chunks = json.loads(CHUNKS_FILE.read_text())
     print(f"{len(chunks)}チャンクをChromaDBに格納開始")
+    print(f"  Embeddingモデル: {EMBEDDING_MODEL}")
+
+    # Embeddingモデル初期化
+    ef = FastEmbedFunction(EMBEDDING_MODEL)
 
     # ChromaDB初期化（永続化）
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))
@@ -29,7 +45,11 @@ def main():
 
     collection = client.create_collection(
         name=COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine"},  # コサイン類似度
+        embedding_function=ef,
+        metadata={
+            "hnsw:space": "cosine",
+            "embedding_model": EMBEDDING_MODEL,
+        },
     )
 
     # バッチで追加
@@ -57,7 +77,7 @@ def main():
 
     # テストクエリ
     print("\n--- テストクエリ ---")
-    test_queries = ["法華経の教え", "教育問題", "備前焼", "プログラミング"]
+    test_queries = ["法華経の教え", "教育問題といじめ", "備前焼の伝統", "プログラミングと開発"]
     for q in test_queries:
         results = collection.query(query_texts=[q], n_results=3)
         print(f"\n「{q}」:")
