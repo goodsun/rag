@@ -10,10 +10,12 @@ noteの記事をローカルでベクトルDB化し、RAG（Retrieval-Augmented 
 
 ## 技術スタック
 
-- **Embedding:** `intfloat/multilingual-e5-small`（sentence-transformers / ローカル / コスト0）
+- **Embedding:** `paraphrase-multilingual-MiniLM-L12-v2`（fastembed/ONNX / ローカル / コスト0）
 - **ベクトルDB:** ChromaDB（軽量・永続化対応）
-- **API:** 既存FastAPI（`/service/api.py`）に検索エンドポイント追加
+- **API:** FastAPI（`/service/api.py`）に検索エンドポイント追加
 - **チャンク分割:** 500〜800文字/チャンク（セクション単位）
+- **タイトル付与:** 各チャンクの先頭に `【記事タイトル】` を付与（検索精度向上）
+- **タイトルフォールバック:** ベクトル検索で漏れた記事をタイトル部分一致で補完
 
 ## ディレクトリ構成
 

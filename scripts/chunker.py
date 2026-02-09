@@ -92,6 +92,8 @@ def main():
         chunks = chunk_article(article["body_text"])
 
         for i, chunk_text in enumerate(chunks):
+            # タイトルをチャンク先頭に付与（検索精度向上）
+            prefixed_text = f"【{title}】\n{chunk_text}"
             chunk = {
                 "chunk_id": f"{article['key']}_c{i:03d}",
                 "article_key": article["key"],
@@ -100,8 +102,8 @@ def main():
                 "published_at": article["published_at"],
                 "chunk_index": i,
                 "total_chunks": len(chunks),
-                "text": chunk_text,
-                "char_count": len(chunk_text),
+                "text": prefixed_text,
+                "char_count": len(prefixed_text),
             }
             all_chunks.append(chunk)
 

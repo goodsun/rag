@@ -90,7 +90,7 @@ def main():
             "id": article["id"],
             "key": key,
             "title": title,
-            "url": f"https://note.com/{NOTE_USERNAME}/{key}",
+            "url": f"https://note.com/{NOTE_USERNAME}/n/{key}",
             "published_at": article.get("publishAt", ""),
             "like_count": article.get("likeCount", 0),
             "body_text": body_text,
