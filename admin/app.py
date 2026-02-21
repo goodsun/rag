@@ -8,6 +8,22 @@ import chromadb
 
 CHROMA_PATH = os.environ.get("CHROMA_PATH", os.path.join(os.path.dirname(__file__), "..", "chroma_db"))
 
+
+def meta_title(meta):
+    """Extract document title from metadata with fallback."""
+    if not meta:
+        return ""
+    return (meta.get("document_title") or meta.get("article_title")
+            or meta.get("title") or meta.get("source") or "")
+
+
+def meta_url(meta):
+    """Extract source URL from metadata with fallback."""
+    if not meta:
+        return ""
+    return (meta.get("origin_url") or meta.get("article_url")
+            or meta.get("url") or meta.get("source_url") or "")
+
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 app.config["APPLICATION_ROOT"] = os.environ.get("APP_ROOT", "/")
@@ -81,11 +97,14 @@ def collection_view(name):
     
     chunks = []
     for i, doc_id in enumerate(result["ids"]):
+        meta = result["metadatas"][i] if result["metadatas"] else {}
         chunks.append({
             "id": doc_id,
             "document": result["documents"][i][:200] if result["documents"][i] else "",
             "full_document": result["documents"][i] or "",
-            "metadata": result["metadatas"][i] if result["metadatas"] else {},
+            "metadata": meta,
+            "title": meta_title(meta),
+            "url": meta_url(meta),
         })
     
     total_pages = (total + per_page - 1) // per_page
@@ -130,8 +149,8 @@ def documents_view(name):
             meta = all_data["metadatas"][i] if all_data["metadatas"] else {}
             articles[art_key] = {
                 "key": art_key,
-                "title": (meta or {}).get("article_title", art_key),
-                "url": (meta or {}).get("article_url", ""),
+                "title": meta_title(meta) or art_key,
+                "url": meta_url(meta),
                 "published_at": (meta or {}).get("published_at", ""),
                 "chunks": [],
                 "total_chars": 0,
@@ -207,10 +226,9 @@ def api_stats(name):
     all_data = col.get(include=["metadatas", "documents"])
     sources = {}
     doc_lengths = []
-    key = "article_title" if "article_title" in meta_keys else "title" if "title" in meta_keys else "source"
     for i, m in enumerate(all_data["metadatas"] or []):
         if m:
-            src = m.get(key, "unknown")
+            src = meta_title(m) or "unknown"
             sources[src] = sources.get(src, 0) + 1
         if all_data["documents"] and all_data["documents"][i]:
             doc_lengths.append(len(all_data["documents"][i]))

@@ -41,7 +41,7 @@
       <td><input type="checkbox" class="chunk-cb" value="{{ chunk.id }}" onchange="updateDeleteBtn()"></td>
       <td><a href="{{ BASE }}/collection/{{ name }}/chunk/{{ chunk.id }}">{{ chunk.id[:35] }}{% if chunk.id|length > 35 %}…{% endif %}</a></td>
       <td class="truncate">{{ chunk.document }}</td>
-      <td style="font-size:11px">{{ chunk.metadata.get('article_title', '')|truncate(30) if chunk.metadata else '' }}</td>
+      <td style="font-size:11px">{{ chunk.title|truncate(30) }}</td>
       <td style="text-align:center">{{ chunk.metadata.get('chunk_index', '') if chunk.metadata else '' }}</td>
       <td style="text-align:right">{{ chunk.full_document|length }}</td>
     </tr>

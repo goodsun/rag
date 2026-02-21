@@ -85,7 +85,7 @@ async function deleteChunk() {
   results.forEach(r => {
     html += `<tr>
       <td><span class="distance">${r.distance}</span></td>
-      <td style="font-size:11px">${escHtml(r.metadata?.article_title || r.id)}</td>
+      <td style="font-size:11px">${escHtml(r.metadata?.document_title || r.metadata?.article_title || r.metadata?.title || r.id)}</td>
       <td class="truncate">${escHtml(r.document.slice(0, 150))}</td>
       <td><a href="${BASE}/collection/{{ name }}/chunk/${encodeURIComponent(r.id)}" class="pma-btn pma-btn-sm">View</a></td>
     </tr>`;
