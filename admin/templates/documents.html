@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Documents — {{ name }} — ragMyAdmin{% endblock %}
+{% block col_count %}1{% endblock %}
+{% block sidebar %}
+<li><a href="{{ BASE }}/collection/{{ name }}"><span class="col-icon">📦</span> {{ name }}</a></li>
+<li><a href="{{ BASE }}/collection/{{ name }}/documents" class="active"><span class="col-icon">📰</span> Documents</a></li>
+{% endblock %}
+
+{% block content %}
+<div class="pma-breadcrumb">
+  <a href="{{ BASE }}/">🏠 Server</a> <span>»</span>
+  <a href="{{ BASE }}/collection/{{ name }}">{{ name }}</a> <span>»</span>
+  Documents
+</div>
+
+<h2 class="pma-heading">📰 Documents ({{ total }} documents)</h2>
+
+<div class="pma-notice">
+  A <b>Document</b> (LogicalDocument) is a group of chunks derived from the same source.
+  Grouped by ID prefix convention: <code>{document_key}_c{index}</code>
+</div>
+
+<div style="margin-bottom:8px;margin-top:8px">
+  <input type="text" id="filter-input" placeholder="Filter documents..." oninput="filterRows()" style="padding:4px 8px;border:1px solid #aaa;border-radius:3px;font-size:12px;width:300px">
+  <button class="pma-btn danger" id="delete-btn" style="display:none" onclick="deleteSelected()">🗑️ Drop selected</button>
+</div>
+
+<table class="pma-table" id="docs-table">
+  <thead>
+    <tr>
+      <th style="width:25px"><input type="checkbox" onchange="toggleAll(this)"></th>
+      <th>#</th>
+      <th>Document Key</th>
+      <th>Title</th>
+      <th style="text-align:center">Chunks</th>
+      <th style="text-align:right">Total Chars</th>
+      <th>Published</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for doc in documents %}
+    <tr data-key="{{ doc.key }}" data-chunks="{{ doc.chunks|tojson|e }}">
+      <td><input type="checkbox" class="doc-cb" value="{{ doc.key }}" onchange="updateDeleteBtn()"></td>
+      <td>{{ loop.index }}</td>
+      <td><code>{{ doc.key }}</code></td>
+      <td>
+        {% if doc.url %}<a href="{{ doc.url }}" target="_blank" title="Open source">{{ doc.title }}</a>
+        {% else %}{{ doc.title }}{% endif %}
+      </td>
+      <td style="text-align:center"><a href="{{ BASE }}/collection/{{ name }}?filter={{ doc.key }}">{{ doc.chunks|length }}</a></td>
+      <td style="text-align:right">{{ doc.total_chars }}</td>
+      <td style="font-size:11px;white-space:nowrap">{{ doc.published_at[:10] if doc.published_at else '' }}</td>
+      <td>
+        <a href="{{ BASE }}/collection/{{ name }}?filter={{ doc.key }}" class="pma-btn pma-btn-sm">📋 Browse</a>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleAll(el) {
+  document.querySelectorAll('.doc-cb').forEach(cb => { cb.checked = el.checked; });
+  updateDeleteBtn();
+}
+function updateDeleteBtn() {
+  const n = document.querySelectorAll('.doc-cb:checked').length;
+  const btn = document.getElementById('delete-btn');
+  btn.style.display = n ? 'inline-block' : 'none';
+  btn.textContent = `🗑️ Drop selected (${n} documents)`;
+}
+async function deleteSelected() {
+  const checked = [...document.querySelectorAll('.doc-cb:checked')];
+  if (!checked.length) return;
+  let allIds = [];
+  checked.forEach(cb => {
+    const tr = cb.closest('tr');
+    const chunks = JSON.parse(tr.dataset.chunks);
+    allIds = allIds.concat(chunks);
+  });
+  if (!confirm(`Drop ${checked.length} document(s) (${allIds.length} chunks total)?`)) return;
+  const resp = await fetch('{{ BASE }}/api/delete', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({collection: '{{ name }}', ids: allIds})
+  });
+  const data = await resp.json();
+  if (data.error) { alert(data.error); return; }
+  alert(`Dropped ${data.deleted} chunks. Remaining: ${data.remaining}`);
+  location.reload();
+}
+function filterRows() {
+  const q = document.getElementById('filter-input').value.toLowerCase();
+  document.querySelectorAll('#docs-table tbody tr').forEach(tr => {
+    tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}

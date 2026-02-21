@@ -2,7 +2,8 @@
 {% block title %}{{ chunk.id }} — ragMyAdmin{% endblock %}
 {% block col_count %}1{% endblock %}
 {% block sidebar %}
-<li><a href="{{ BASE }}/collection/{{ name }}"><span class="col-icon">📦</span> {{ name }}</a></li>
+<li><a href="{{ BASE }}/collection/{{ name }}/documents"><span class="col-icon">📰</span> Documents</a></li>
+<li><a href="{{ BASE }}/collection/{{ name }}"><span class="col-icon">📦</span> Chunks</a></li>
 {% endblock %}
 
 {% block content %}

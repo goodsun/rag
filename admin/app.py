@@ -115,8 +115,8 @@ def chunk_detail(name, chunk_id):
     return render_template("chunk_detail.html", name=name, chunk=chunk)
 
 
-@app.route("/collection/<name>/articles")
-def articles_view(name):
+@app.route("/collection/<name>/documents")
+def documents_view(name):
     client = get_client()
     col = client.get_collection(name)
     all_data = col.get(include=["documents", "metadatas"])
@@ -143,7 +143,7 @@ def articles_view(name):
     # Sort by published_at desc, then title
     sorted_articles = sorted(articles.values(), key=lambda a: a.get("published_at", ""), reverse=True)
     
-    return render_template("articles.html", name=name, articles=sorted_articles, total=len(sorted_articles))
+    return render_template("documents.html", name=name, documents=sorted_articles, total=len(sorted_articles))
 
 
 @app.route("/api/search", methods=["POST"])
