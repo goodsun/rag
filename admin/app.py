@@ -363,7 +363,24 @@ def document_edit(name, doc_key):
                             if k not in ("chunk_index", "total_chunks")}
     
     chunks.sort(key=lambda c: c["id"])
-    full_text = "\n".join(c["document"] for c in chunks)
+    
+    # Merge chunks removing overlapping parts
+    full_text = ""
+    for c in chunks:
+        doc = c["document"]
+        if not full_text:
+            full_text = doc
+            continue
+        # Find overlap: try matching the end of full_text with start of doc
+        best = 0
+        max_check = min(len(full_text), len(doc), 200)
+        for ov in range(20, max_check):
+            if full_text[-ov:] == doc[:ov]:
+                best = ov
+        if best > 0:
+            full_text += doc[best:]
+        else:
+            full_text += "\n" + doc
     title = smart_title(meta_base, roles) or doc_key
     
     return render_template("document_edit.html",
