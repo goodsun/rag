@@ -53,6 +53,7 @@
       <td style="font-size:11px;white-space:nowrap">{{ doc.published_at[:10] if doc.published_at else '' }}</td>
       <td>
         <a href="{{ BASE }}/collection/{{ name }}?filter={{ doc.key }}" class="pma-btn pma-btn-sm">📋 Browse</a>
+        <a href="{{ BASE }}/collection/{{ name }}/document/{{ doc.key }}/edit" class="pma-btn pma-btn-sm">✏️ Edit</a>
       </td>
     </tr>
   {% endfor %}

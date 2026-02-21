@@ -7,6 +7,28 @@ from flask import Flask, render_template, request, jsonify
 import chromadb
 
 CHROMA_PATH = os.environ.get("CHROMA_PATH", os.path.join(os.path.dirname(__file__), "..", "chroma_db"))
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+
+# Lazy-loaded embedding function
+_embed_fn = None
+
+def get_embed_fn():
+    global _embed_fn
+    if _embed_fn is None:
+        from fastembed import TextEmbedding
+        class FastEmbedFunction(chromadb.EmbeddingFunction):
+            def __init__(self, model_name):
+                self.model = TextEmbedding(model_name)
+            def __call__(self, input):
+                return [e.tolist() for e in self.model.embed(input)]
+        _embed_fn = FastEmbedFunction(EMBEDDING_MODEL)
+    return _embed_fn
+
+
+def get_collection(name):
+    """Get collection with embedding function for write operations."""
+    client = get_client()
+    return client.get_collection(name, embedding_function=get_embed_fn())
 
 
 def meta_title(meta):
@@ -319,6 +341,36 @@ def documents_view(name):
     return render_template("documents.html", name=name, documents=sorted_articles, total=len(sorted_articles))
 
 
+@app.route("/collection/<name>/document/<doc_key>/edit")
+def document_edit(name, doc_key):
+    client = get_client()
+    col = client.get_collection(name)
+    roles = get_field_roles(name)
+    
+    # Get all chunks for this document
+    all_data = col.get(include=["documents", "metadatas"])
+    chunks = []
+    meta_base = {}
+    for i, doc_id in enumerate(all_data["ids"]):
+        if doc_id.startswith(doc_key + "_c"):
+            chunks.append({
+                "id": doc_id,
+                "document": all_data["documents"][i],
+                "metadata": all_data["metadatas"][i] if all_data["metadatas"] else {},
+            })
+            if not meta_base and all_data["metadatas"] and all_data["metadatas"][i]:
+                meta_base = {k: v for k, v in all_data["metadatas"][i].items()
+                            if k not in ("chunk_index", "total_chunks")}
+    
+    chunks.sort(key=lambda c: c["id"])
+    full_text = "\n".join(c["document"] for c in chunks)
+    title = smart_title(meta_base, roles) or doc_key
+    
+    return render_template("document_edit.html",
+        name=name, doc_key=doc_key, title=title,
+        chunks=chunks, full_text=full_text, meta_base=meta_base)
+
+
 @app.route("/api/roles/<name>")
 def api_roles(name):
     """Return auto-detected field roles for a collection."""
@@ -352,6 +404,86 @@ def api_search():
         })
     
     return jsonify({"results": items, "query": query, "collection": col_name})
+
+
+@app.route("/api/update_chunk", methods=["POST"])
+def api_update_chunk():
+    data = request.json
+    col_name = data.get("collection")
+    chunk_id = data.get("id")
+    new_text = data.get("document")
+    new_metadata = data.get("metadata")
+    
+    if not col_name or not chunk_id or new_text is None:
+        return jsonify({"error": "collection, id, and document required"}), 400
+    
+    col = get_collection(col_name)
+    
+    update_kwargs = {"ids": [chunk_id], "documents": [new_text]}
+    if new_metadata:
+        update_kwargs["metadatas"] = [new_metadata]
+    
+    col.update(**update_kwargs)
+    
+    # Clear field roles cache
+    _field_roles_cache.pop(col_name, None)
+    
+    return jsonify({"updated": chunk_id, "new_length": len(new_text)})
+
+
+@app.route("/api/rechunk", methods=["POST"])
+def api_rechunk():
+    """Re-chunk a document: delete all chunks, re-split, re-embed."""
+    data = request.json
+    col_name = data.get("collection")
+    doc_key = data.get("document_key")
+    full_text = data.get("text")
+    metadata_base = data.get("metadata", {})
+    chunk_size = int(data.get("chunk_size", 600))
+    chunk_overlap = int(data.get("overlap", 100))
+    
+    if not col_name or not doc_key or not full_text:
+        return jsonify({"error": "collection, document_key, and text required"}), 400
+    
+    col = get_collection(col_name)
+    
+    # 1. Delete existing chunks for this document
+    all_ids = col.get()["ids"]
+    old_ids = [i for i in all_ids if i.startswith(doc_key + "_c")]
+    if old_ids:
+        col.delete(ids=old_ids)
+    
+    # 2. Simple chunking with overlap
+    chunks = []
+    text = full_text.strip()
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+        if chunk.strip():
+            chunks.append(chunk)
+        start = end - chunk_overlap
+        if start >= len(text):
+            break
+    
+    # 3. Add new chunks
+    new_ids = [f"{doc_key}_c{i:03d}" for i in range(len(chunks))]
+    new_metas = []
+    for i in range(len(chunks)):
+        m = dict(metadata_base)
+        m["chunk_index"] = i
+        m["total_chunks"] = len(chunks)
+        new_metas.append(m)
+    
+    col.add(ids=new_ids, documents=chunks, metadatas=new_metas)
+    
+    _field_roles_cache.pop(col_name, None)
+    
+    return jsonify({
+        "document_key": doc_key,
+        "old_chunks": len(old_ids),
+        "new_chunks": len(chunks),
+    })
 
 
 @app.route("/api/delete", methods=["POST"])

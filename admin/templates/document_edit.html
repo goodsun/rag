@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Edit: {{ title }} — ragMyAdmin{% endblock %}
+{% block col_count %}1{% endblock %}
+{% block sidebar %}
+<li><a href="{{ BASE }}/collection/{{ name }}/documents"><span class="col-icon">📰</span> Documents</a></li>
+<li><a href="{{ BASE }}/collection/{{ name }}"><span class="col-icon">📦</span> Chunks</a></li>
+{% endblock %}
+
+{% block content %}
+<div class="pma-breadcrumb">
+  <a href="{{ BASE }}/">🏠 Server</a> <span>»</span>
+  <a href="{{ BASE }}/collection/{{ name }}">{{ name }}</a> <span>»</span>
+  <a href="{{ BASE }}/collection/{{ name }}/documents">Documents</a> <span>»</span>
+  Edit: {{ doc_key }}
+</div>
+
+<h2 class="pma-heading">✏️ Edit Document: {{ title }}</h2>
+
+<div class="pma-notice">
+  Document key: <code>{{ doc_key }}</code> |
+  Current chunks: <b>{{ chunks|length }}</b> |
+  Total chars: <b id="total-chars">{{ full_text|length }}</b>
+  <br>Editing the full document will <b>delete all existing chunks</b> and re-chunk + re-embed.
+</div>
+
+<h3>ℹ️ Metadata (preserved across re-chunking)</h3>
+<table class="pma-table" style="width:auto;margin-bottom:12px">
+  {% for k, v in meta_base.items()|sort %}
+  <tr><th>{{ k }}</th><td>{{ v }}</td></tr>
+  {% endfor %}
+</table>
+
+<h3>📝 Full Document Text</h3>
+<textarea id="doc-text" style="width:100%;min-height:500px;padding:12px;font-family:monospace;font-size:12px;line-height:1.7;border:2px solid #235a81;border-radius:3px;background:#fffff0;resize:vertical" oninput="updateStats()">{{ full_text }}</textarea>
+
+<div style="margin-top:8px;display:flex;align-items:center;gap:8px">
+  <label style="font-size:12px">Chunk size: <input type="number" id="chunk-size" value="600" min="100" max="2000" style="width:60px;padding:3px;border:1px solid #aaa;border-radius:3px"></label>
+  <label style="font-size:12px">Overlap: <input type="number" id="overlap" value="100" min="0" max="500" style="width:60px;padding:3px;border:1px solid #aaa;border-radius:3px"></label>
+  <button class="pma-btn" onclick="previewChunks()">👁️ Preview chunks</button>
+  <button class="pma-btn" onclick="saveDocument()" style="background:linear-gradient(to bottom,#e8f5e9,#c8e6c9);border-color:#4caf50;color:#2e7d32;font-weight:bold">💾 Save & Re-embed</button>
+  <a href="{{ BASE }}/collection/{{ name }}/documents" class="pma-btn">Cancel</a>
+  <span id="save-status" style="font-size:11px;color:#666"></span>
+</div>
+
+<div id="chunk-preview" style="margin-top:12px;display:none">
+  <h3>👁️ Chunk Preview</h3>
+  <div id="chunk-preview-content"></div>
+</div>
+
+<h3 style="margin-top:16px">📋 Current Chunks ({{ chunks|length }})</h3>
+<table class="pma-table">
+  <thead><tr><th>#</th><th>ID</th><th>Preview</th><th>Length</th></tr></thead>
+  <tbody>
+  {% for chunk in chunks %}
+  <tr>
+    <td>{{ loop.index0 }}</td>
+    <td><a href="{{ BASE }}/collection/{{ name }}/chunk/{{ chunk.id }}">{{ chunk.id }}</a></td>
+    <td class="truncate">{{ chunk.document[:100] }}</td>
+    <td>{{ chunk.document|length }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const metaBase = {{ meta_base|tojson }};
+
+function updateStats() {
+  document.getElementById('total-chars').textContent = document.getElementById('doc-text').value.length;
+}
+
+function simpleChunk(text, size, overlap) {
+  const chunks = [];
+  let start = 0;
+  while (start < text.length) {
+    const end = start + size;
+    const chunk = text.slice(start, end).trim();
+    if (chunk) chunks.push(chunk);
+    start = end - overlap;
+    if (start >= text.length) break;
+  }
+  return chunks;
+}
+
+function previewChunks() {
+  const text = document.getElementById('doc-text').value.trim();
+  const size = parseInt(document.getElementById('chunk-size').value);
+  const overlap = parseInt(document.getElementById('overlap').value);
+  const chunks = simpleChunk(text, size, overlap);
+  
+  const panel = document.getElementById('chunk-preview');
+  const content = document.getElementById('chunk-preview-content');
+  panel.style.display = 'block';
+  
+  let html = `<div class="pma-notice">${chunks.length} chunks (size=${size}, overlap=${overlap})</div>`;
+  html += '<table class="pma-table"><thead><tr><th>#</th><th>Preview</th><th>Length</th></tr></thead><tbody>';
+  chunks.forEach((c, i) => {
+    html += `<tr><td>${i}</td><td class="truncate">${escHtml(c.slice(0, 150))}</td><td>${c.length}</td></tr>`;
+  });
+  html += '</tbody></table>';
+  content.innerHTML = html;
+}
+
+async function saveDocument() {
+  const text = document.getElementById('doc-text').value.trim();
+  if (!text) { alert('Text is empty'); return; }
+  
+  const size = parseInt(document.getElementById('chunk-size').value);
+  const overlap = parseInt(document.getElementById('overlap').value);
+  const chunks = simpleChunk(text, size, overlap);
+  
+  if (!confirm(`This will:\n- Delete {{ chunks|length }} existing chunks\n- Create ${chunks.length} new chunks\n- Re-embed all\n\nProceed?`)) return;
+  
+  const status = document.getElementById('save-status');
+  status.textContent = '⏳ Re-chunking & embedding...';
+  
+  const resp = await fetch('{{ BASE }}/api/rechunk', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      collection: '{{ name }}',
+      document_key: '{{ doc_key }}',
+      text: text,
+      metadata: metaBase,
+      chunk_size: size,
+      overlap: overlap
+    })
+  });
+  const data = await resp.json();
+  if (data.error) { status.textContent = '❌ ' + data.error; return; }
+  
+  status.textContent = `✅ Done! ${data.old_chunks} → ${data.new_chunks} chunks`;
+  setTimeout(() => location.href = '{{ BASE }}/collection/{{ name }}/documents', 1500);
+}
+
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+</script>
+{% endblock %}
