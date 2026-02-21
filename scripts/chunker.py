@@ -2,9 +2,10 @@
 """記事をチャンクに分割してchunks/に保存する
 
 ## Dunder (__) メタデータ規約
-- __key: ドキュメントグルーピング用キー（chunk IDのプレフィックス）
+- __key: ドキュメント固有キー（chunk IDのプレフィックス）
+- __origin: ソースのベースパス（__origin + __key でURLを再構成可能）
 - __title: 表示用タイトル
-- __url: 元ソースURL
+- __url: 元ソースURL（__origin + __key の便利な派生値）
 - __date: 公開日/作成日
 - __index: チャンク順序（自動付与）
 - __total: 総チャンク数（自動付与）
@@ -110,6 +111,15 @@ def process_article(article: dict) -> list[dict]:
     doc_url = article.get("__url") or article.get("url", "")
     doc_date = article.get("__date") or article.get("published_at", "")
     
+    # __origin: URLからキー部分を除いたベースパス
+    doc_origin = article.get("__origin", "")
+    if not doc_origin and doc_url and doc_key:
+        # URLからkeyを除去してorigin推定
+        if doc_url.endswith(doc_key):
+            doc_origin = doc_url[:-len(doc_key)]
+        elif "/" + doc_key in doc_url:
+            doc_origin = doc_url[:doc_url.rfind("/" + doc_key) + 1]
+    
     # __chunk_prefix: 指定があればそれを使う、なければ __title でプレフィックス
     chunk_prefix_spec = article.get("__chunk_prefix", "__title")
     
@@ -131,6 +141,7 @@ def process_article(article: dict) -> list[dict]:
     # メタデータベース構築
     base_meta = {
         "__key": doc_key,
+        "__origin": doc_origin,
         "__title": doc_title,
         "__url": doc_url,
         "__date": doc_date,
