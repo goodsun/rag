@@ -155,21 +155,35 @@ def api_stats(name):
         if m:
             meta_keys.update(m.keys())
     
-    # Get source distribution if 'source' or 'title' in metadata
+    # Get source distribution and doc length stats
+    all_data = col.get(include=["metadatas", "documents"])
     sources = {}
-    if "title" in meta_keys or "source" in meta_keys:
-        all_meta = col.get(include=["metadatas"])
-        key = "title" if "title" in meta_keys else "source"
-        for m in (all_meta["metadatas"] or []):
-            if m:
-                src = m.get(key, "unknown")
-                sources[src] = sources.get(src, 0) + 1
+    doc_lengths = []
+    key = "article_title" if "article_title" in meta_keys else "title" if "title" in meta_keys else "source"
+    for i, m in enumerate(all_data["metadatas"] or []):
+        if m:
+            src = m.get(key, "unknown")
+            sources[src] = sources.get(src, 0) + 1
+        if all_data["documents"] and all_data["documents"][i]:
+            doc_lengths.append(len(all_data["documents"][i]))
+    
+    len_stats = {}
+    if doc_lengths:
+        doc_lengths.sort()
+        len_stats = {
+            "min": min(doc_lengths),
+            "max": max(doc_lengths),
+            "avg": round(sum(doc_lengths) / len(doc_lengths)),
+            "median": doc_lengths[len(doc_lengths) // 2],
+            "total_chars": sum(doc_lengths),
+        }
     
     return jsonify({
         "name": name,
         "count": count,
         "metadata_keys": sorted(meta_keys),
         "sources": dict(sorted(sources.items(), key=lambda x: -x[1])[:30]),
+        "doc_lengths": len_stats,
     })
 
 

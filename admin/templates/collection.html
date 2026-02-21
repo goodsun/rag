@@ -31,6 +31,7 @@
       <th>Document (preview)</th>
       <th>Title</th>
       <th>Chunk #</th>
+      <th>Length</th>
     </tr>
   </thead>
   <tbody>
@@ -41,6 +42,7 @@
       <td class="truncate">{{ chunk.document }}</td>
       <td style="font-size:11px">{{ chunk.metadata.get('article_title', '')|truncate(30) if chunk.metadata else '' }}</td>
       <td style="text-align:center">{{ chunk.metadata.get('chunk_index', '') if chunk.metadata else '' }}</td>
+      <td style="text-align:right">{{ chunk.full_document|length }}</td>
     </tr>
   {% endfor %}
   </tbody>
