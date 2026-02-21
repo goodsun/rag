@@ -91,8 +91,8 @@ def chunk_detail(name, chunk_id):
         "id": result["ids"][0],
         "document": result["documents"][0],
         "metadata": result["metadatas"][0] if result["metadatas"] else {},
-        "embedding_dim": len(result["embeddings"][0]) if result["embeddings"] and result["embeddings"][0] else 0,
-        "embedding_preview": result["embeddings"][0][:10] if result["embeddings"] and result["embeddings"][0] else [],
+        "embedding_dim": len(result["embeddings"][0]) if result["embeddings"] is not None and len(result["embeddings"]) > 0 else 0,
+        "embedding_preview": list(result["embeddings"][0][:10]) if result["embeddings"] is not None and len(result["embeddings"]) > 0 else [],
     }
     
     return render_template("chunk_detail.html", name=name, chunk=chunk)
