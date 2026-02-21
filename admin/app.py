@@ -55,12 +55,29 @@ def collection_view(name):
     # Get total count
     total = col.count()
     
+    # Filter support
+    filter_key = request.args.get("filter", "")
+    
     # Get chunk IDs
-    result = col.get(
-        limit=per_page,
-        offset=(page - 1) * per_page,
-        include=["documents", "metadatas"]
-    )
+    if filter_key:
+        # Get all and filter by ID prefix
+        all_result = col.get(include=["documents", "metadatas"])
+        filtered_ids = [i for i, doc_id in enumerate(all_result["ids"]) if doc_id.startswith(filter_key)]
+        total = len(filtered_ids)
+        start = (page - 1) * per_page
+        end = start + per_page
+        page_indices = filtered_ids[start:end]
+        result = {
+            "ids": [all_result["ids"][i] for i in page_indices],
+            "documents": [all_result["documents"][i] for i in page_indices],
+            "metadatas": [all_result["metadatas"][i] for i in page_indices],
+        }
+    else:
+        result = col.get(
+            limit=per_page,
+            offset=(page - 1) * per_page,
+            include=["documents", "metadatas"]
+        )
     
     chunks = []
     for i, doc_id in enumerate(result["ids"]):
@@ -96,6 +113,37 @@ def chunk_detail(name, chunk_id):
     }
     
     return render_template("chunk_detail.html", name=name, chunk=chunk)
+
+
+@app.route("/collection/<name>/articles")
+def articles_view(name):
+    client = get_client()
+    col = client.get_collection(name)
+    all_data = col.get(include=["documents", "metadatas"])
+    
+    # Group by article key (ID before _c)
+    articles = {}
+    for i, doc_id in enumerate(all_data["ids"]):
+        parts = doc_id.rsplit("_c", 1)
+        art_key = parts[0] if len(parts) == 2 else doc_id
+        if art_key not in articles:
+            meta = all_data["metadatas"][i] if all_data["metadatas"] else {}
+            articles[art_key] = {
+                "key": art_key,
+                "title": (meta or {}).get("article_title", art_key),
+                "url": (meta or {}).get("article_url", ""),
+                "published_at": (meta or {}).get("published_at", ""),
+                "chunks": [],
+                "total_chars": 0,
+            }
+        doc_len = len(all_data["documents"][i]) if all_data["documents"][i] else 0
+        articles[art_key]["chunks"].append(doc_id)
+        articles[art_key]["total_chars"] += doc_len
+    
+    # Sort by published_at desc, then title
+    sorted_articles = sorted(articles.values(), key=lambda a: a.get("published_at", ""), reverse=True)
+    
+    return render_template("articles.html", name=name, articles=sorted_articles, total=len(sorted_articles))
 
 
 @app.route("/api/search", methods=["POST"])

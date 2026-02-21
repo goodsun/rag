@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Articles — {{ name }} — ragMyAdmin{% endblock %}
+{% block col_count %}1{% endblock %}
+{% block sidebar %}
+<li><a href="{{ BASE }}/collection/{{ name }}"><span class="col-icon">📦</span> {{ name }}</a></li>
+<li><a href="{{ BASE }}/collection/{{ name }}/articles" class="active"><span class="col-icon">📰</span> Articles</a></li>
+{% endblock %}
+
+{% block content %}
+<div class="pma-breadcrumb">
+  <a href="{{ BASE }}/">🏠 Server</a> <span>»</span>
+  <a href="{{ BASE }}/collection/{{ name }}">{{ name }}</a> <span>»</span>
+  Articles
+</div>
+
+<h2 class="pma-heading">📰 Articles ({{ total }} articles)</h2>
+
+<div style="margin-bottom:8px">
+  <input type="text" id="filter-input" placeholder="Filter articles..." oninput="filterRows()" style="padding:4px 8px;border:1px solid #aaa;border-radius:3px;font-size:12px;width:300px">
+  <button class="pma-btn danger" id="delete-btn" style="display:none" onclick="deleteSelected()">🗑️ Delete selected articles</button>
+</div>
+
+<table class="pma-table" id="articles-table">
+  <thead>
+    <tr>
+      <th style="width:25px"><input type="checkbox" onchange="toggleAll(this)"></th>
+      <th>#</th>
+      <th>Article Key</th>
+      <th>Title</th>
+      <th style="text-align:center">Chunks</th>
+      <th style="text-align:right">Total Chars</th>
+      <th>Published</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for art in articles %}
+    <tr data-key="{{ art.key }}" data-chunks="{{ art.chunks|tojson|e }}">
+      <td><input type="checkbox" class="art-cb" value="{{ art.key }}" onchange="updateDeleteBtn()"></td>
+      <td>{{ loop.index }}</td>
+      <td><code>{{ art.key }}</code></td>
+      <td>
+        {% if art.url %}<a href="{{ art.url }}" target="_blank" title="Open on note.com">{{ art.title }}</a>
+        {% else %}{{ art.title }}{% endif %}
+      </td>
+      <td style="text-align:center">{{ art.chunks|length }}</td>
+      <td style="text-align:right">{{ art.total_chars }}</td>
+      <td style="font-size:11px;white-space:nowrap">{{ art.published_at[:10] if art.published_at else '' }}</td>
+      <td>
+        <a href="{{ BASE }}/collection/{{ name }}?filter={{ art.key }}" class="pma-btn pma-btn-sm">📋 Chunks</a>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleAll(el) {
+  document.querySelectorAll('.art-cb').forEach(cb => { cb.checked = el.checked; });
+  updateDeleteBtn();
+}
+function updateDeleteBtn() {
+  const n = document.querySelectorAll('.art-cb:checked').length;
+  const btn = document.getElementById('delete-btn');
+  btn.style.display = n ? 'inline-block' : 'none';
+  btn.textContent = `🗑️ Delete selected articles (${n})`;
+}
+async function deleteSelected() {
+  const checked = [...document.querySelectorAll('.art-cb:checked')];
+  if (!checked.length) return;
+  
+  // Collect all chunk IDs for selected articles
+  let allIds = [];
+  checked.forEach(cb => {
+    const tr = cb.closest('tr');
+    const chunks = JSON.parse(tr.dataset.chunks);
+    allIds = allIds.concat(chunks);
+  });
+  
+  if (!confirm(`Delete ${checked.length} article(s) (${allIds.length} chunks)?`)) return;
+  
+  const resp = await fetch('{{ BASE }}/api/delete', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({collection: '{{ name }}', ids: allIds})
+  });
+  const data = await resp.json();
+  if (data.error) { alert(data.error); return; }
+  alert(`Deleted ${data.deleted} chunks. Remaining: ${data.remaining}`);
+  location.reload();
+}
+function filterRows() {
+  const q = document.getElementById('filter-input').value.toLowerCase();
+  document.querySelectorAll('#articles-table tbody tr').forEach(tr => {
+    tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}

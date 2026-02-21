@@ -27,6 +27,7 @@
     <td>{{ col.count }}</td>
     <td>
       <a href="{{ BASE }}/collection/{{ col.name }}" class="pma-btn pma-btn-sm">📋 Browse</a>
+      <a href="{{ BASE }}/collection/{{ col.name }}/articles" class="pma-btn pma-btn-sm">📰 Articles</a>
       <button class="pma-btn pma-btn-sm" onclick="loadStats('{{ col.name }}')">📊 Stats</button>
       <a href="#search" class="pma-btn pma-btn-sm" onclick="document.getElementById('search-query').focus()">🔍 Search</a>
     </td>
