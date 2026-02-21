@@ -23,7 +23,7 @@
 <h3>ℹ️ Metadata</h3>
 {% if chunk.metadata %}
 <table class="pma-table" style="width:auto">
-  {% for k, v in chunk.metadata.items() %}
+  {% for k, v in chunk.metadata.items()|sort %}
   <tr>
     <th>{{ k }}</th>
     <td>
