@@ -104,10 +104,16 @@ async function loadStats(name) {
   
   const maxCount = Math.max(...Object.values(data.sources));
   const dl = data.doc_lengths || {};
+  // Also fetch auto-detected roles
+  const rolesResp = await fetch(`${BASE}/api/roles/${name}`);
+  const roles = await rolesResp.json();
+  const rolesHtml = Object.entries(roles).filter(([k,v]) => v).map(([k,v]) => `<code>${k} → ${v}</code>`).join(' ');
+  
   let html = `<div class="pma-notice">
     <b>${data.count}</b> chunks | <b>${data.metadata_keys.length}</b> metadata keys | <b>${Object.keys(data.sources).length}</b> sources<br>
     Keys: ${data.metadata_keys.map(k => `<code>${k}</code>`).join(' ')}
     ${dl.avg ? `<br>📏 Chunk length: min <b>${dl.min}</b> / avg <b>${dl.avg}</b> / median <b>${dl.median}</b> / max <b>${dl.max}</b> chars | Total: <b>${(dl.total_chars/1000).toFixed(0)}K</b> chars` : ''}
+    ${rolesHtml ? `<br>🔍 Auto-detected roles: ${rolesHtml}` : ''}
   </div>`;
   html += '<h3>📄 Source Distribution (Top 30)</h3>';
   Object.entries(data.sources).forEach(([src, cnt]) => {
