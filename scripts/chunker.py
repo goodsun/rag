@@ -146,11 +146,6 @@ def process_article(article: dict) -> list[dict]:
         "__url": doc_url,
         "__date": doc_date,
         "__chunk_prefix": chunk_prefix_spec,
-        # 旧キー互換（チャットボット等の既存消費者向け）
-        "article_key": doc_key,
-        "article_title": doc_title,
-        "article_url": doc_url,
-        "published_at": doc_date,
     }
     base_meta.update(extra_meta)
     
@@ -167,9 +162,6 @@ def process_article(article: dict) -> list[dict]:
         chunk_meta = dict(base_meta)
         chunk_meta["__index"] = i
         chunk_meta["__total"] = len(chunks)
-        # 旧キー互換
-        chunk_meta["chunk_index"] = i
-        chunk_meta["total_chunks"] = len(chunks)
         
         result.append({
             "chunk_id": f"{doc_key}_c{i:03d}",

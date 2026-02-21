@@ -31,8 +31,8 @@ def search(query: str, n: int = 5):
     ):
         items.append({
             "distance": round(dist, 4),
-            "title": meta.get("article_title", ""),
-            "url": meta.get("article_url", ""),
+            "title": meta.get('__title', ''),
+            "url": meta.get('__url', ''),
             "text": doc[:300],
         })
     return items
