@@ -35,7 +35,7 @@ def meta_title(meta):
     """Extract document title from metadata with fallback."""
     if not meta:
         return ""
-    return (meta.get("document_title") or meta.get("article_title")
+    return (meta.get("__title") or meta.get("document_title") or meta.get("article_title")
             or meta.get("title") or meta.get("source") or "")
 
 
@@ -43,7 +43,7 @@ def meta_url(meta):
     """Extract source URL from metadata with fallback."""
     if not meta:
         return ""
-    return (meta.get("origin_url") or meta.get("article_url")
+    return (meta.get("__url") or meta.get("origin_url") or meta.get("article_url")
             or meta.get("url") or meta.get("source_url") or "")
 
 
@@ -152,9 +152,18 @@ def detect_field_roles(metadatas):
                 if score > 0:
                     scored["index"].append((key, score))
     
-    # Pick highest scored field for each role
-    for role in roles:
-        if scored[role]:
+    # Dunder (__) convention takes absolute priority
+    dunder_map = {
+        "title": "__title",
+        "url": "__url",
+        "date": "__date",
+        "key": "__key",
+        "index": "__index",
+    }
+    for role, dunder_key in dunder_map.items():
+        if dunder_key in key_values:
+            roles[role] = dunder_key
+        elif scored[role]:
             scored[role].sort(key=lambda x: -x[1])
             roles[role] = scored[role][0][0]
     
@@ -322,12 +331,12 @@ def documents_view(name):
         art_key = parts[0] if len(parts) == 2 else doc_id
         if art_key not in articles:
             meta = all_data["metadatas"][i] if all_data["metadatas"] else {}
-            date_field = roles.get("date", "published_at")
+            date_field = roles.get("date") or "published_at"
             articles[art_key] = {
                 "key": art_key,
                 "title": smart_title(meta, roles) or art_key,
                 "url": smart_url(meta, roles),
-                "published_at": (meta or {}).get(date_field, ""),
+                "published_at": (meta or {}).get(date_field) or (meta or {}).get("__date", ""),
                 "chunks": [],
                 "total_chars": 0,
             }

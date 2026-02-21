@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
-"""チャンクをChromaDBに格納する（多言語Embeddingモデル使用）"""
+"""チャンクをChromaDBに格納する（多言語Embeddingモデル使用）
 
+Usage:
+    python embed.py                          # デフォルト: note_articles
+    python embed.py --collection my_docs     # コレクション名指定
+    python embed.py --append                 # 既存コレクションに追記（削除しない）
+"""
+
+import argparse
 import json
 from pathlib import Path
 
@@ -11,7 +18,7 @@ CHUNKS_FILE = Path(__file__).parent.parent / "data" / "chunks" / "all_chunks.jso
 CHROMA_DIR = Path(__file__).parent.parent / "chroma_db"
 COLLECTION_NAME = "note_articles"
 EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-BATCH_SIZE = 100
+BATCH_SIZE = 50
 
 
 class FastEmbedFunction(chromadb.EmbeddingFunction):
@@ -25,26 +32,31 @@ class FastEmbedFunction(chromadb.EmbeddingFunction):
 
 
 def main():
-    # チャンク読み込み
-    chunks = json.loads(CHUNKS_FILE.read_text())
+    parser = argparse.ArgumentParser(description="チャンクをChromaDBに格納")
+    parser.add_argument("--collection", default=COLLECTION_NAME, help="コレクション名")
+    parser.add_argument("--chunks", default=str(CHUNKS_FILE), help="チャンクJSONファイルパス")
+    parser.add_argument("--append", action="store_true", help="既存コレクションに追記")
+    args = parser.parse_args()
+
+    chunks_path = Path(args.chunks)
+    chunks = json.loads(chunks_path.read_text())
     print(f"{len(chunks)}チャンクをChromaDBに格納開始")
+    print(f"  コレクション: {args.collection}")
     print(f"  Embeddingモデル: {EMBEDDING_MODEL}")
+    print(f"  モード: {'追記' if args.append else '再構築'}")
 
-    # Embeddingモデル初期化
     ef = FastEmbedFunction(EMBEDDING_MODEL)
-
-    # ChromaDB初期化（永続化）
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))
 
-    # 既存コレクションがあれば削除して再作成
-    try:
-        client.delete_collection(COLLECTION_NAME)
-        print(f"  既存コレクション '{COLLECTION_NAME}' を削除")
-    except Exception:
-        pass
+    if not args.append:
+        try:
+            client.delete_collection(args.collection)
+            print(f"  既存コレクション '{args.collection}' を削除")
+        except Exception:
+            pass
 
-    collection = client.create_collection(
-        name=COLLECTION_NAME,
+    collection = client.get_or_create_collection(
+        name=args.collection,
         embedding_function=ef,
         metadata={
             "hnsw:space": "cosine",
@@ -52,28 +64,34 @@ def main():
         },
     )
 
-    # バッチで追加
     for i in range(0, len(chunks), BATCH_SIZE):
         batch = chunks[i : i + BATCH_SIZE]
+        
+        # メタデータ: 新形式（metadata フィールド）と旧形式の両対応
+        metadatas = []
+        for c in batch:
+            if "metadata" in c:
+                # 新形式: chunker.py が metadata dict を生成
+                metadatas.append(c["metadata"])
+            else:
+                # 旧形式互換
+                metadatas.append({
+                    "article_key": c.get("article_key", ""),
+                    "article_title": c.get("article_title", ""),
+                    "article_url": c.get("article_url", ""),
+                    "published_at": c.get("published_at", ""),
+                    "chunk_index": c.get("chunk_index", 0),
+                    "total_chunks": c.get("total_chunks", 0),
+                })
+        
         collection.add(
             ids=[c["chunk_id"] for c in batch],
             documents=[c["text"] for c in batch],
-            metadatas=[
-                {
-                    "article_key": c["article_key"],
-                    "article_title": c["article_title"],
-                    "article_url": c["article_url"],
-                    "published_at": c["published_at"],
-                    "chunk_index": c["chunk_index"],
-                    "total_chunks": c["total_chunks"],
-                }
-                for c in batch
-            ],
+            metadatas=metadatas,
         )
         print(f"  [{min(i + BATCH_SIZE, len(chunks))}/{len(chunks)}] 格納完了")
 
-    # 検証
-    print(f"\n格納完了！コレクション '{COLLECTION_NAME}' に {collection.count()} チャンク")
+    print(f"\n格納完了！コレクション '{args.collection}' に {collection.count()} チャンク")
 
     # テストクエリ
     print("\n--- テストクエリ ---")
@@ -84,7 +102,8 @@ def main():
         for doc, meta, dist in zip(
             results["documents"][0], results["metadatas"][0], results["distances"][0]
         ):
-            print(f"  [{dist:.3f}] {meta['article_title']}")
+            title = meta.get("__title") or meta.get("article_title", "?")
+            print(f"  [{dist:.3f}] {title}")
             print(f"         {doc[:80]}...")
 
 
