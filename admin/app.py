@@ -35,16 +35,21 @@ def meta_title(meta):
     """Extract document title from metadata with fallback."""
     if not meta:
         return ""
-    return (meta.get("__title") or meta.get("document_title") or meta.get("article_title")
-            or meta.get("title") or meta.get("source") or "")
+    return (meta.get("title") or meta.get("__title") or meta.get("document_title")
+            or meta.get("article_title") or meta.get("source") or "")
 
 
 def meta_url(meta):
-    """Extract source URL from metadata with fallback."""
+    """Extract source URL from metadata with fallback. Reconstructs from origin + key if needed."""
     if not meta:
         return ""
-    return (meta.get("__url") or meta.get("origin_url") or meta.get("article_url")
-            or meta.get("url") or meta.get("source_url") or "")
+    # origin + key で再構成
+    origin = meta.get("origin", "")
+    key = meta.get("key", "")
+    if origin and key:
+        return origin + key
+    return (meta.get("url") or meta.get("__url") or meta.get("origin_url")
+            or meta.get("article_url") or meta.get("source_url") or "")
 
 
 import re
@@ -152,20 +157,24 @@ def detect_field_roles(metadatas):
                 if score > 0:
                     scored["index"].append((key, score))
     
-    # Dunder (__) convention takes absolute priority
-    dunder_map = {
-        "title": "__title",
-        "url": "__url",
-        "date": "__date",
-        "key": "__key",
-        "index": "__index",
+    # Standard field names take priority (ragMyAdmin convention)
+    standard_map = {
+        "title": "title",
+        "url": None,  # URL is reconstructed from origin + key
+        "date": "date",
+        "key": "key",
+        "index": "index",
     }
-    for role, dunder_key in dunder_map.items():
-        if dunder_key in key_values:
-            roles[role] = dunder_key
+    for role, std_key in standard_map.items():
+        if std_key and std_key in key_values:
+            roles[role] = std_key
         elif scored[role]:
             scored[role].sort(key=lambda x: -x[1])
             roles[role] = scored[role][0][0]
+    
+    # URL role: check for origin field (reconstruct from origin + key)
+    if "origin" in key_values:
+        roles["origin"] = "origin"
     
     return roles
 
@@ -331,12 +340,12 @@ def documents_view(name):
         art_key = parts[0] if len(parts) == 2 else doc_id
         if art_key not in articles:
             meta = all_data["metadatas"][i] if all_data["metadatas"] else {}
-            date_field = roles.get("date") or "published_at"
+            date_field = roles.get("date") or "date"
             articles[art_key] = {
                 "key": art_key,
                 "title": smart_title(meta, roles) or art_key,
                 "url": smart_url(meta, roles),
-                "published_at": (meta or {}).get(date_field) or (meta or {}).get("__date", ""),
+                "published_at": (meta or {}).get(date_field, ""),
                 "chunks": [],
                 "total_chars": 0,
             }

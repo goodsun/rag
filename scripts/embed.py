@@ -102,7 +102,7 @@ def main():
         for doc, meta, dist in zip(
             results["documents"][0], results["metadatas"][0], results["distances"][0]
         ):
-            title = meta.get("__title") or meta.get("article_title", "?")
+            title = meta.get("title", "?")
             print(f"  [{dist:.3f}] {title}")
             print(f"         {doc[:80]}...")
 

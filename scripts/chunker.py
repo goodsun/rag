@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 """記事をチャンクに分割してchunks/に保存する
 
-## Dunder (__) メタデータ規約
-- __key: ドキュメント固有キー（chunk IDのプレフィックス）
-- __origin: ソースのベースパス（__origin + __key でURLを再構成可能）
-- __title: 表示用タイトル
-- __url: 元ソースURL（__origin + __key の便利な派生値）
-- __date: 公開日/作成日
-- __index: チャンク順序（自動付与）
-- __total: 総チャンク数（自動付与）
+## ragMyAdmin メタデータ規約
+
+### 標準フィールド（データ）
+- key: ドキュメント固有キー（chunk IDのプレフィックス）
+- origin: ソースのベースパス（origin + key でURLを再構成）
+- title: 表示用タイトル
+- date: 公開日/作成日
+- index: チャンク順序（自動付与）
+  ※ これ以外のフィールドは自由に追加可能（tags, author, section 等）
+
+### Dunder（命令）
 - __chunk_prefix: チャンク先頭に付与するメタデータキー名（カンマ区切り）
-  例: "__title" → 1行目にタイトルを追加
-  例: "__title, tags, author" → 1行目にタイトル・タグ・著者を追加
+  チャンクテキストの1行目に 【値1 | 値2 | ...】 を追加。
+  embeddingに含まれるため検索精度が向上する。
+  ドキュメント編集時は1行目を削除して結合、更新時に再付与。
+  例: "title" → 【タイトル】
+  例: "title, tags, author" → 【タイトル | タグ | 著者】
 """
 
 import json
@@ -86,7 +92,7 @@ def build_chunk_prefix(meta: dict, prefix_spec: str) -> str:
     """__chunk_prefix仕様に基づいてプレフィックス行を生成する
     
     prefix_spec: カンマ区切りのメタデータキー名
-    例: "__title, tags, author" → "タイトル | タグ | 著者名"
+    例: "title, tags, author" → "タイトル | タグ | 著者名"
     """
     if not prefix_spec:
         return ""
@@ -100,32 +106,27 @@ def build_chunk_prefix(meta: dict, prefix_spec: str) -> str:
 
 
 def process_article(article: dict) -> list[dict]:
-    """1記事分のrawデータをチャンクリストに変換する
+    """1記事分のrawデータをチャンクリストに変換する"""
+    # 標準メタデータ抽出（rawデータのキー名はバリエーションあり）
+    doc_key = article.get("key", "unknown")
+    doc_title = article.get("title", "")
+    doc_date = article.get("date") or article.get("published_at", "")
+    doc_url = article.get("url", "")
     
-    rawデータに __key, __title 等の dunder メタデータがあればそれを使う。
-    なければ旧形式（key, title等）からフォールバック。
-    """
-    # Dunderメタデータ抽出（明示的指定 > 旧キーからのフォールバック）
-    doc_key = article.get("__key") or article.get("key", "unknown")
-    doc_title = article.get("__title") or article.get("title", "")
-    doc_url = article.get("__url") or article.get("url", "")
-    doc_date = article.get("__date") or article.get("published_at", "")
-    
-    # __origin: URLからキー部分を除いたベースパス
-    doc_origin = article.get("__origin", "")
+    # origin: URLからキー部分を除いたベースパス
+    doc_origin = article.get("origin", "")
     if not doc_origin and doc_url and doc_key:
-        # URLからkeyを除去してorigin推定
         if doc_url.endswith(doc_key):
             doc_origin = doc_url[:-len(doc_key)]
         elif "/" + doc_key in doc_url:
             doc_origin = doc_url[:doc_url.rfind("/" + doc_key) + 1]
     
-    # __chunk_prefix: 指定があればそれを使う、なければ __title でプレフィックス
-    chunk_prefix_spec = article.get("__chunk_prefix", "__title")
+    # __chunk_prefix: 指定があればそれを使う、なければ title でプレフィックス
+    chunk_prefix_spec = article.get("__chunk_prefix", "title")
     
-    # ユーザー定義メタデータ（dunders + 標準フィールド以外）を収集
-    skip_keys = {"id", "key", "title", "url", "published_at", "like_count",
-                 "body_text", "body", "text", "content"}
+    # ユーザー定義メタデータ（標準 + スキップ対象以外）を収集
+    skip_keys = {"id", "key", "title", "url", "date", "published_at", "like_count",
+                 "body_text", "body", "text", "content", "origin"}
     extra_meta = {}
     for k, v in article.items():
         if k.startswith("__") or k in skip_keys:
@@ -140,11 +141,10 @@ def process_article(article: dict) -> list[dict]:
     
     # メタデータベース構築
     base_meta = {
-        "__key": doc_key,
-        "__origin": doc_origin,
-        "__title": doc_title,
-        "__url": doc_url,
-        "__date": doc_date,
+        "key": doc_key,
+        "origin": doc_origin,
+        "title": doc_title,
+        "date": doc_date,
         "__chunk_prefix": chunk_prefix_spec,
     }
     base_meta.update(extra_meta)
@@ -160,8 +160,7 @@ def process_article(article: dict) -> list[dict]:
         
         # チャンクメタデータ
         chunk_meta = dict(base_meta)
-        chunk_meta["__index"] = i
-        chunk_meta["__total"] = len(chunks)
+        chunk_meta["index"] = i
         
         result.append({
             "chunk_id": f"{doc_key}_c{i:03d}",
@@ -185,7 +184,7 @@ def main():
         article = json.loads(f.read_text())
         chunks = process_article(article)
         all_chunks.extend(chunks)
-        title = article.get("__title") or article.get("title", f.stem)
+        title = article.get("title", f.stem)
         print(f"  {title}: {len(chunks)}チャンク")
 
     # 全チャンクを1ファイルに保存
