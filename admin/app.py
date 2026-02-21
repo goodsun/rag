@@ -364,16 +364,14 @@ def document_edit(name, doc_key):
     
     chunks.sort(key=lambda c: c["id"])
     
-    # Merge chunks: remove title prefix + overlapping parts
-    doc_title = smart_title(meta_base, roles)
-    title_prefix = f"【{doc_title}】\n" if doc_title else ""
-    
+    # Merge chunks: strip first line (title prefix) + remove overlap
     full_text = ""
     for i, c in enumerate(chunks):
         doc = c["document"]
-        # Strip known title prefix from all chunks (first one too for clean editing)
-        if title_prefix and doc.startswith(title_prefix):
-            doc = doc[len(title_prefix):]
+        # First line is always the 【title】 prefix — strip it
+        first_nl = doc.find("\n")
+        if first_nl > 0:
+            doc = doc[first_nl + 1:]
         # Find overlap: try matching the end of full_text with start of doc
         best = 0
         max_check = min(len(full_text), len(doc), 200)
