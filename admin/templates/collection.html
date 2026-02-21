@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} — ragMyAdmin{% endblock %}
+{% block col_count %}1{% endblock %}
+{% block sidebar %}
+<li><a href="{{ BASE }}/collection/{{ name }}" class="active"><span class="col-icon">📦</span> {{ name }} <span class="col-count">{{ total }}</span></a></li>
+{% endblock %}
+
+{% block content %}
+<div class="pma-breadcrumb">
+  <a href="{{ BASE }}/">🏠 Server</a> <span>»</span> <a href="{{ BASE }}/collection/{{ name }}">{{ name }}</a> <span>»</span> Browse
+</div>
+
+<h2 class="pma-heading">📋 Browsing collection "{{ name }}" ({{ total }} chunks, page {{ page }}/{{ total_pages }})</h2>
+
+<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
+  <input type="text" id="filter-input" placeholder="Filter rows..." oninput="filterRows()" style="padding:4px 8px;border:1px solid #aaa;border-radius:3px;font-size:12px;width:250px">
+  <button class="pma-btn danger" id="delete-btn" style="display:none" onclick="deleteSelected()">🗑️ Delete selected</button>
+  <div style="margin-left:auto;font-size:11px;color:#666">
+    Per page:
+    <a href="?page=1&per_page=25" class="pma-btn pma-btn-sm">25</a>
+    <a href="?page=1&per_page=50" class="pma-btn pma-btn-sm">50</a>
+    <a href="?page=1&per_page=100" class="pma-btn pma-btn-sm">100</a>
+  </div>
+</div>
+
+<table class="pma-table" id="chunks-table">
+  <thead>
+    <tr>
+      <th style="width:25px"><input type="checkbox" onchange="toggleAll(this)" title="Check all"></th>
+      <th>ID</th>
+      <th>Document (preview)</th>
+      <th>Title</th>
+      <th>Chunk #</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for chunk in chunks %}
+    <tr data-id="{{ chunk.id }}">
+      <td><input type="checkbox" class="chunk-cb" value="{{ chunk.id }}" onchange="updateDeleteBtn()"></td>
+      <td><a href="{{ BASE }}/collection/{{ name }}/chunk/{{ chunk.id }}">{{ chunk.id[:35] }}{% if chunk.id|length > 35 %}…{% endif %}</a></td>
+      <td class="truncate">{{ chunk.document }}</td>
+      <td style="font-size:11px">{{ chunk.metadata.get('article_title', '')|truncate(30) if chunk.metadata else '' }}</td>
+      <td style="text-align:center">{{ chunk.metadata.get('chunk_index', '') if chunk.metadata else '' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% if total_pages > 1 %}
+<div class="pma-pagination">
+  {% if page > 1 %}<a href="?page={{ page-1 }}&per_page={{ per_page }}">« Prev</a>{% endif %}
+  {% for p in range(1, total_pages+1) %}
+    {% if p == page %}
+      <span class="current">{{ p }}</span>
+    {% elif p <= 3 or p >= total_pages-2 or (p >= page-2 and p <= page+2) %}
+      <a href="?page={{ p }}&per_page={{ per_page }}">{{ p }}</a>
+    {% elif p == 4 or p == total_pages-3 %}
+      <span style="color:#999">…</span>
+    {% endif %}
+  {% endfor %}
+  {% if page < total_pages %}<a href="?page={{ page+1 }}&per_page={{ per_page }}">Next »</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleAll(el) {
+  document.querySelectorAll('.chunk-cb').forEach(cb => { cb.checked = el.checked; });
+  updateDeleteBtn();
+}
+function updateDeleteBtn() {
+  const n = document.querySelectorAll('.chunk-cb:checked').length;
+  const btn = document.getElementById('delete-btn');
+  btn.style.display = n ? 'inline-block' : 'none';
+  btn.textContent = `🗑️ Delete selected (${n})`;
+}
+async function deleteSelected() {
+  const ids = [...document.querySelectorAll('.chunk-cb:checked')].map(cb => cb.value);
+  if (!ids.length) return;
+  if (!confirm(`Delete ${ids.length} chunk(s)?`)) return;
+  const resp = await fetch('{{ BASE }}/api/delete', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({collection: '{{ name }}', ids})
+  });
+  const data = await resp.json();
+  if (data.error) { alert(data.error); return; }
+  alert(`Deleted ${data.deleted} chunk(s). Remaining: ${data.remaining}`);
+  location.reload();
+}
+function filterRows() {
+  const q = document.getElementById('filter-input').value.toLowerCase();
+  document.querySelectorAll('#chunks-table tbody tr').forEach(tr => {
+    tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}

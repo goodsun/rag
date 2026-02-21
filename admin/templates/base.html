@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}ragMyAdmin{% endblock %}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: sans-serif; font-size: 13px; color: #333; background: #e7e7e7; }
+  a { color: #235a81; text-decoration: none; }
+  a:hover { color: #c00; text-decoration: underline; }
+
+  /* phpMyAdmin-style header */
+  .pma-header { background: #f3f3f3; border-bottom: 1px solid #ccc; padding: 4px 12px; display: flex; align-items: center; gap: 12px; }
+  .pma-header .logo { font-size: 16px; font-weight: bold; color: #235a81; }
+  .pma-header .logo span { color: #e87d0d; }
+  .pma-header nav { display: flex; gap: 4px; margin-left: 20px; }
+  .pma-header nav a { padding: 4px 10px; background: #ddd; border: 1px solid #bbb; border-bottom: none; border-radius: 4px 4px 0 0; font-size: 12px; color: #333; }
+  .pma-header nav a:hover, .pma-header nav a.active { background: #fff; text-decoration: none; }
+  .pma-header .server-info { margin-left: auto; font-size: 11px; color: #666; }
+
+  /* Layout: sidebar + main */
+  .pma-layout { display: flex; min-height: calc(100vh - 30px); }
+  
+  /* Sidebar */
+  .pma-sidebar { width: 220px; background: #f3f3f3; border-right: 1px solid #ccc; padding: 8px 0; flex-shrink: 0; }
+  .pma-sidebar .section-title { padding: 4px 12px; font-size: 11px; color: #666; text-transform: uppercase; font-weight: bold; margin-top: 8px; }
+  .pma-sidebar ul { list-style: none; }
+  .pma-sidebar li { border-bottom: 1px solid #e7e7e7; }
+  .pma-sidebar li a { display: flex; align-items: center; gap: 6px; padding: 5px 12px; font-size: 12px; color: #333; }
+  .pma-sidebar li a:hover { background: #dceaf7; text-decoration: none; }
+  .pma-sidebar li a.active { background: #d0e4f5; font-weight: bold; }
+  .pma-sidebar .col-icon { font-size: 14px; }
+  .pma-sidebar .col-count { margin-left: auto; font-size: 10px; color: #888; background: #e0e0e0; padding: 1px 6px; border-radius: 8px; }
+
+  /* Main content */
+  .pma-main { flex: 1; background: #fff; padding: 12px 16px; }
+
+  /* Breadcrumb */
+  .pma-breadcrumb { font-size: 12px; color: #666; margin-bottom: 12px; padding: 6px 0; border-bottom: 1px solid #eee; }
+  .pma-breadcrumb a { color: #235a81; }
+  .pma-breadcrumb span { color: #999; margin: 0 4px; }
+
+  /* Page heading */
+  h2.pma-heading { font-size: 16px; color: #235a81; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 2px solid #e87d0d; display: flex; align-items: center; gap: 8px; }
+  h3 { font-size: 13px; color: #235a81; margin: 12px 0 6px; }
+
+  /* Tables — phpMyAdmin style */
+  table.pma-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 12px; }
+  table.pma-table th { background: #d9e4f1; border: 1px solid #bcc7d8; padding: 5px 8px; text-align: left; font-weight: bold; color: #333; white-space: nowrap; }
+  table.pma-table td { border: 1px solid #ddd; padding: 4px 8px; vertical-align: top; }
+  table.pma-table tr:nth-child(even) { background: #f5f5f5; }
+  table.pma-table tr:hover { background: #ffe8c6; }
+  table.pma-table tr.marked { background: #d5eddb !important; }
+  td.truncate { max-width: 450px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Buttons — phpMyAdmin style */
+  .pma-btn { display: inline-block; padding: 3px 10px; border: 1px solid #aaa; background: linear-gradient(to bottom, #f9f9f9, #e3e3e3); border-radius: 3px; font-size: 12px; color: #333; cursor: pointer; }
+  .pma-btn:hover { background: linear-gradient(to bottom, #fff, #ddd); text-decoration: none; }
+  .pma-btn.danger { color: #c00; border-color: #c00; }
+  .pma-btn.danger:hover { background: #fdd; }
+  .pma-btn-sm { padding: 1px 6px; font-size: 11px; }
+
+  /* Search box */
+  .pma-search { display: flex; gap: 6px; margin-bottom: 12px; padding: 8px; background: #f0f0f0; border: 1px solid #ddd; border-radius: 3px; }
+  .pma-search input[type="text"], .pma-search select { padding: 4px 8px; border: 1px solid #aaa; border-radius: 3px; font-size: 12px; }
+  .pma-search input[type="text"] { flex: 1; }
+  .pma-search input[type="number"] { width: 50px; padding: 4px; border: 1px solid #aaa; border-radius: 3px; font-size: 12px; }
+
+  /* Search results */
+  .result-item { padding: 8px; margin-bottom: 8px; border: 1px solid #ddd; border-left: 3px solid #e87d0d; background: #fafafa; }
+  .result-item:hover { background: #fff8ef; }
+  .result-item .distance { display: inline-block; background: #235a81; color: #fff; padding: 1px 6px; border-radius: 3px; font-size: 10px; }
+  .result-item .doc-text { color: #555; font-size: 12px; white-space: pre-wrap; word-break: break-word; margin-top: 4px; }
+  .result-item .meta { margin-top: 4px; font-size: 11px; color: #888; }
+
+  /* Pagination — phpMyAdmin style */
+  .pma-pagination { display: flex; gap: 2px; margin: 12px 0; font-size: 12px; }
+  .pma-pagination a, .pma-pagination span { padding: 3px 8px; border: 1px solid #aaa; background: #f3f3f3; }
+  .pma-pagination a:hover { background: #dceaf7; text-decoration: none; }
+  .pma-pagination span.current { background: #235a81; color: #fff; border-color: #235a81; }
+
+  /* Info boxes */
+  .pma-notice { padding: 8px 12px; margin-bottom: 12px; border: 1px solid #ffd27f; background: #fff5dd; border-radius: 3px; font-size: 12px; }
+  .pma-success { padding: 8px 12px; margin-bottom: 12px; border: 1px solid #90d296; background: #dff5e1; border-radius: 3px; font-size: 12px; }
+
+  /* Stats bars */
+  .source-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; font-size: 11px; }
+  .source-bar .bar { height: 14px; background: linear-gradient(90deg, #235a81, #5b9bd5); border-radius: 2px; min-width: 3px; }
+  .source-bar .name { width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #333; }
+  .source-bar .count { color: #666; font-weight: bold; }
+
+  /* Chunk content (detail view) */
+  .chunk-content { background: #f9f9f9; border: 1px solid #ddd; padding: 12px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 500px; overflow-y: auto; line-height: 1.7; }
+
+  input[type="checkbox"] { cursor: pointer; }
+  .loading { text-align: center; padding: 20px; color: #888; }
+  .empty { text-align: center; padding: 20px; color: #888; }
+  code { background: #f0f0f0; padding: 1px 4px; border: 1px solid #ddd; border-radius: 2px; font-size: 12px; }
+</style>
+</head>
+<body>
+  <div class="pma-header">
+    <div class="logo">🗄️ <span>rag</span>MyAdmin</div>
+    <nav>
+      <a href="{{ BASE }}/" {% if request.endpoint == 'index' %}class="active"{% endif %}>🏠 Dashboard</a>
+    </nav>
+    <div class="server-info">ChromaDB @ {{ BASE or 'localhost' }} | Collections: {% block col_count %}?{% endblock %}</div>
+  </div>
+  <div class="pma-layout">
+    <div class="pma-sidebar">
+      <div class="section-title">Collections</div>
+      <ul id="sidebar-collections">
+        {% block sidebar %}{% endblock %}
+      </ul>
+    </div>
+    <div class="pma-main">
+      {% block content %}{% endblock %}
+    </div>
+  </div>
+  <script>const BASE = "{{ BASE }}";</script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}{{ chunk.id }} — ragMyAdmin{% endblock %}
+{% block col_count %}1{% endblock %}
+{% block sidebar %}
+<li><a href="{{ BASE }}/collection/{{ name }}"><span class="col-icon">📦</span> {{ name }}</a></li>
+{% endblock %}
+
+{% block content %}
+<div class="pma-breadcrumb">
+  <a href="{{ BASE }}/">🏠 Server</a> <span>»</span>
+  <a href="{{ BASE }}/collection/{{ name }}">{{ name }}</a> <span>»</span>
+  Chunk detail
+</div>
+
+<h2 class="pma-heading">📄 Chunk: <code>{{ chunk.id }}</code></h2>
+
+<div style="margin-bottom:12px">
+  <button class="pma-btn danger" onclick="deleteChunk()">🗑️ Drop</button>
+  <a href="{{ BASE }}/collection/{{ name }}" class="pma-btn">← Back to collection</a>
+</div>
+
+<h3>ℹ️ Metadata</h3>
+{% if chunk.metadata %}
+<table class="pma-table" style="width:auto">
+  {% for k, v in chunk.metadata.items() %}
+  <tr>
+    <th>{{ k }}</th>
+    <td>
+      {% if v is string and v.startswith('http') %}
+        <a href="{{ v }}" target="_blank">{{ v }}</a>
+      {% else %}
+        {{ v }}
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="pma-notice">No metadata</div>
+{% endif %}
+
+<h3>🔢 Embedding</h3>
+<div class="pma-notice">
+  Dimensions: <b>{{ chunk.embedding_dim }}</b>
+  {% if chunk.embedding_preview %}
+  | Preview: [{{ chunk.embedding_preview|map('round', 4)|join(', ') }}, …]
+  {% endif %}
+</div>
+
+<h3>📝 Document Content</h3>
+<div class="chunk-content">{{ chunk.document }}</div>
+
+<h3 style="margin-top:16px">🔍 Similar Chunks</h3>
+<div id="similar-results"><div class="loading">⏳ Loading similar chunks...</div></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function deleteChunk() {
+  if (!confirm('Delete this chunk?')) return;
+  const resp = await fetch('{{ BASE }}/api/delete', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({collection: '{{ name }}', ids: ['{{ chunk.id }}']})
+  });
+  const data = await resp.json();
+  if (data.error) { alert(data.error); return; }
+  alert('Deleted.');
+  location.href = '{{ BASE }}/collection/{{ name }}';
+}
+
+(async function() {
+  const doc = {{ chunk.document|tojson }};
+  const resp = await fetch('{{ BASE }}/api/search', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({collection: '{{ name }}', query: doc.slice(0, 500), n_results: 6})
+  });
+  const data = await resp.json();
+  const el = document.getElementById('similar-results');
+  const results = data.results.filter(r => r.id !== '{{ chunk.id }}').slice(0, 5);
+  
+  if (!results.length) { el.innerHTML = '<div class="pma-notice">No similar chunks found</div>'; return; }
+  
+  let html = '<table class="pma-table"><thead><tr><th>Distance</th><th>Source</th><th>Preview</th><th></th></tr></thead><tbody>';
+  results.forEach(r => {
+    html += `<tr>
+      <td><span class="distance">${r.distance}</span></td>
+      <td style="font-size:11px">${escHtml(r.metadata?.article_title || r.id)}</td>
+      <td class="truncate">${escHtml(r.document.slice(0, 150))}</td>
+      <td><a href="${BASE}/collection/{{ name }}/chunk/${encodeURIComponent(r.id)}" class="pma-btn pma-btn-sm">View</a></td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  el.innerHTML = html;
+})();
+
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+</script>
+{% endblock %}
