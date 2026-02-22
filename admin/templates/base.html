@@ -110,15 +110,35 @@
   <div class="pma-layout">
     <div class="pma-sidebar">
       <div class="section-title">Collections</div>
-      <ul id="sidebar-collections">
-        {% block sidebar %}{% endblock %}
-      </ul>
+      <ul id="sidebar-collections"></ul>
+      {% block sidebar_extra %}{% endblock %}
     </div>
     <div class="pma-main">
       {% block content %}{% endblock %}
     </div>
   </div>
-  <script>const BASE = "{{ BASE }}";</script>
+  <script>
+    const BASE = "{{ BASE }}";
+    const CURRENT_COLLECTION = "{{ current_collection|default('') }}";
+    const CURRENT_VIEW = "{{ current_view|default('') }}";
+    
+    // Build sidebar dynamically
+    fetch(`${BASE}/api/collections`).then(r => r.json()).then(cols => {
+      const ul = document.getElementById('sidebar-collections');
+      cols.forEach(c => {
+        const isActive = c.name === CURRENT_COLLECTION;
+        let html = `<li><a href="${BASE}/collection/${c.name}" class="${isActive && CURRENT_VIEW === 'chunks' ? 'active' : ''}" style="${isActive ? 'font-weight:bold' : ''}"><span class="col-icon">📁</span> ${c.name} <span class="col-count">${c.count}</span></a>`;
+        if (isActive) {
+          html += `<ul style="list-style:none;padding-left:20px;margin:0">
+            <li><a href="${BASE}/collection/${c.name}/documents" class="${CURRENT_VIEW === 'documents' || CURRENT_VIEW === 'document_edit' ? 'active' : ''}" style="padding:3px 12px;font-size:11px"><span class="col-icon">📰</span> Documents</a></li>
+            <li><a href="${BASE}/collection/${c.name}" class="${CURRENT_VIEW === 'chunks' ? 'active' : ''}" style="padding:3px 12px;font-size:11px"><span class="col-icon">📦</span> Chunks</a></li>
+          </ul>`;
+        }
+        html += '</li>';
+        ul.innerHTML += html;
+      });
+    });
+  </script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

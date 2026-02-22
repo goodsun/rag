@@ -1,16 +1,19 @@
 {% extends "base.html" %}
 {% block title %}{{ chunk.id }} — ragMyAdmin{% endblock %}
 {% block col_count %}1{% endblock %}
-{% block sidebar %}
-<li><a href="{{ BASE }}/collection/{{ name }}/documents"><span class="col-icon">📰</span> Documents</a></li>
-<li><a href="{{ BASE }}/collection/{{ name }}"><span class="col-icon">📦</span> Chunks</a></li>
-{% endblock %}
+
 
 {% block content %}
 <div class="pma-breadcrumb">
-  <a href="{{ BASE }}/">🏠 Server</a> <span>»</span>
+  <a href="{{ BASE }}/">Collections</a> <span>»</span>
   <a href="{{ BASE }}/collection/{{ name }}">{{ name }}</a> <span>»</span>
-  Chunk detail
+  {% set parts = chunk.id.rsplit('_c', 1) %}
+  {% if parts|length == 2 %}
+    <a href="{{ BASE }}/collection/{{ name }}/document/{{ parts[0] }}/edit">{{ parts[0] }}</a> <span>»</span>
+    c{{ parts[1] }}
+  {% else %}
+    {{ chunk.id }}
+  {% endif %}
 </div>
 
 <h2 class="pma-heading">📄 Chunk: <code>{{ chunk.id }}</code></h2>

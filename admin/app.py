@@ -300,7 +300,7 @@ def collection_view(name):
     
     total_pages = (total + per_page - 1) // per_page
     
-    return render_template("collection.html",
+    return render_template("collection.html", current_collection=name, current_view="chunks",
         name=name, chunks=chunks, total=total,
         page=page, per_page=per_page, total_pages=total_pages)
 
@@ -322,7 +322,7 @@ def chunk_detail(name, chunk_id):
         "embedding_preview": list(result["embeddings"][0][:10]) if result["embeddings"] is not None and len(result["embeddings"]) > 0 else [],
     }
     
-    return render_template("chunk_detail.html", name=name, chunk=chunk)
+    return render_template("chunk_detail.html", current_collection=name, current_view="chunk_detail", name=name, chunk=chunk)
 
 
 @app.route("/collection/<name>/documents")
@@ -356,7 +356,7 @@ def documents_view(name):
     # Sort by published_at desc, then title
     sorted_articles = sorted(articles.values(), key=lambda a: a.get("published_at", ""), reverse=True)
     
-    return render_template("documents.html", name=name, documents=sorted_articles, total=len(sorted_articles))
+    return render_template("documents.html", current_collection=name, current_view="documents", name=name, documents=sorted_articles, total=len(sorted_articles))
 
 
 @app.route("/collection/<name>/document/<doc_key>/edit")
@@ -402,9 +402,16 @@ def document_edit(name, doc_key):
             full_text += "\n" + doc
     title = smart_title(meta_base, roles) or doc_key
     
-    return render_template("document_edit.html",
+    return render_template("document_edit.html", current_collection=name, current_view="document_edit",
         name=name, doc_key=doc_key, title=title,
         chunks=chunks, full_text=full_text, meta_base=meta_base)
+
+
+@app.route("/api/collections")
+def api_collections():
+    """Return list of collections with counts."""
+    client = get_client()
+    return jsonify([{"name": c.name, "count": c.count()} for c in client.list_collections()])
 
 
 @app.route("/api/roles/<name>")

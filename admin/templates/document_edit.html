@@ -1,17 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Edit: {{ title }} — ragMyAdmin{% endblock %}
 {% block col_count %}1{% endblock %}
-{% block sidebar %}
-<li><a href="{{ BASE }}/collection/{{ name }}/documents"><span class="col-icon">📰</span> Documents</a></li>
-<li><a href="{{ BASE }}/collection/{{ name }}"><span class="col-icon">📦</span> Chunks</a></li>
-{% endblock %}
+
 
 {% block content %}
 <div class="pma-breadcrumb">
-  <a href="{{ BASE }}/">🏠 Server</a> <span>»</span>
+  <a href="{{ BASE }}/">Collections</a> <span>»</span>
   <a href="{{ BASE }}/collection/{{ name }}">{{ name }}</a> <span>»</span>
   <a href="{{ BASE }}/collection/{{ name }}/documents">Documents</a> <span>»</span>
-  Edit: {{ doc_key }}
+  {{ doc_key }}
 </div>
 
 <h2 class="pma-heading">✏️ Edit Document: {{ title }}</h2>
