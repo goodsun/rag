@@ -378,7 +378,7 @@ def document_edit(name, doc_key):
             })
             if not meta_base and all_data["metadatas"] and all_data["metadatas"][i]:
                 meta_base = {k: v for k, v in all_data["metadatas"][i].items()
-                            if k not in ("chunk_index", "total_chunks")}
+                            if k != "index"}
     
     chunks.sort(key=lambda c: c["id"])
     
@@ -502,13 +502,20 @@ def api_rechunk():
         if start >= len(text):
             break
     
-    # 3. Add new chunks
+    # 3. Apply __chunk_prefix to each chunk
+    prefix_spec = metadata_base.get("__chunk_prefix", "")
+    if prefix_spec:
+        parts = [metadata_base.get(k.strip(), "") for k in prefix_spec.split(",")]
+        prefix_line = " | ".join(str(p) for p in parts if p)
+        if prefix_line:
+            chunks = [f"【{prefix_line}】\n{c}" for c in chunks]
+    
+    # 4. Add new chunks
     new_ids = [f"{doc_key}_c{i:03d}" for i in range(len(chunks))]
     new_metas = []
     for i in range(len(chunks)):
         m = dict(metadata_base)
-        m["chunk_index"] = i
-        m["total_chunks"] = len(chunks)
+        m["index"] = i
         new_metas.append(m)
     
     col.add(ids=new_ids, documents=chunks, metadatas=new_metas)
