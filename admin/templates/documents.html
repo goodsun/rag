@@ -5,12 +5,10 @@
 
 {% block content %}
 <div class="pma-breadcrumb">
-  <a href="{{ BASE }}/">Collections</a> <span>»</span>
-  <a href="{{ BASE }}/collection/{{ name }}">{{ name }}</a> <span>»</span>
-  Documents
+  <a href="{{ BASE }}/">Collections</a> <span>»</span> {{ name }}
 </div>
 
-<h2 class="pma-heading">📰 Documents ({{ total }} documents)</h2>
+<h2 class="pma-heading">📰 {{ name }} — {{ total }} documents, {{ chunk_total }} chunks</h2>
 
 <div class="pma-notice">
   A <b>Document</b> (LogicalDocument) is a group of chunks derived from the same source.
@@ -31,6 +29,7 @@
       <th>Title</th>
       <th style="text-align:center">Chunks</th>
       <th style="text-align:right">Total Chars</th>
+      <th>Owner</th>
       <th>Published</th>
       <th></th>
     </tr>
@@ -40,17 +39,18 @@
     <tr data-key="{{ doc.key }}" data-chunks="{{ doc.chunks|tojson|e }}">
       <td><input type="checkbox" class="doc-cb" value="{{ doc.key }}" onchange="updateDeleteBtn()"></td>
       <td>{{ loop.index }}</td>
-      <td><code>{{ doc.key }}</code></td>
-      <td>
-        {% if doc.url %}<a href="{{ doc.url }}" target="_blank" title="Open source">{{ doc.title }}</a>
+      <td><a href="{{ BASE }}/collection/{{ name }}/document/{{ doc.key }}"><code>{{ doc.key }}</code></a></td>
+      <td style="max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="{{ doc.title }}">
+        {% if doc.url %}<a href="{{ doc.url }}" target="_blank">{{ doc.title }}</a>
         {% else %}{{ doc.title }}{% endif %}
       </td>
-      <td style="text-align:center"><a href="{{ BASE }}/collection/{{ name }}?filter={{ doc.key }}">{{ doc.chunks|length }}</a></td>
+      <td style="text-align:center">{{ doc.chunks|length }}</td>
       <td style="text-align:right">{{ doc.total_chars }}</td>
+      <td style="font-size:11px">{{ doc.owner if doc.owner else 'system' }}</td>
       <td style="font-size:11px;white-space:nowrap">{{ doc.published_at[:10] if doc.published_at else '' }}</td>
-      <td>
-        <a href="{{ BASE }}/collection/{{ name }}?filter={{ doc.key }}" class="pma-btn pma-btn-sm">📋 Browse</a>
-        <a href="{{ BASE }}/collection/{{ name }}/document/{{ doc.key }}/edit" class="pma-btn pma-btn-sm">✏️ Edit</a>
+      <td style="white-space:nowrap">
+        <a href="{{ BASE }}/collection/{{ name }}/document/{{ doc.key }}/edit" class="pma-btn pma-btn-sm" title="Edit">✏️</a>
+        <button class="pma-btn pma-btn-sm" title="Delete" onclick="deleteDoc('{{ doc.key }}', {{ doc.chunks|tojson|e }})">🗑️</button>
       </td>
     </tr>
   {% endfor %}
@@ -69,6 +69,17 @@ function updateDeleteBtn() {
   const btn = document.getElementById('delete-btn');
   btn.style.display = n ? 'inline-block' : 'none';
   btn.textContent = `🗑️ Drop selected (${n} documents)`;
+}
+async function deleteDoc(key, chunks) {
+  if (!confirm(`Delete document "${key}" (${chunks.length} chunks)?`)) return;
+  const resp = await fetch('{{ BASE }}/api/delete', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({collection: '{{ name }}', ids: chunks})
+  });
+  const data = await resp.json();
+  if (data.error) { alert(data.error); return; }
+  alert(`Deleted ${data.deleted} chunks.`);
+  location.reload();
 }
 async function deleteSelected() {
   const checked = [...document.querySelectorAll('.doc-cb:checked')];

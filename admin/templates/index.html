@@ -3,7 +3,7 @@
 {% block col_count %}{{ collections|length }}{% endblock %}
 {% block sidebar %}
   {% for col in collections %}
-  <li><a href="{{ BASE }}/collection/{{ col.name }}"><span class="col-icon">📦</span> {{ col.name }} <span class="col-count">{{ col.count }}</span></a></li>
+  <li><a href="{{ BASE }}/collection/{{ col.name }}"><span class="col-icon">📦</span> {{ col.name }}</a></li>
   {% endfor %}
 {% endblock %}
 
@@ -18,16 +18,16 @@
 </div>
 
 <table class="pma-table">
-  <thead><tr><th></th><th>Collection</th><th>Chunks</th><th>Action</th></tr></thead>
+  <thead><tr><th></th><th>Collection</th><th>Documents</th><th>Chunks</th><th>Action</th></tr></thead>
   <tbody>
   {% for col in collections %}
   <tr>
     <td style="text-align:center">📦</td>
     <td><a href="{{ BASE }}/collection/{{ col.name }}"><b>{{ col.name }}</b></a></td>
+    <td>{{ col.doc_count }}</td>
     <td>{{ col.count }}</td>
     <td>
-      <a href="{{ BASE }}/collection/{{ col.name }}" class="pma-btn pma-btn-sm">📋 Browse</a>
-      <a href="{{ BASE }}/collection/{{ col.name }}/documents" class="pma-btn pma-btn-sm">📰 Documents</a>
+      <a href="{{ BASE }}/collection/{{ col.name }}" class="pma-btn pma-btn-sm">📰 Browse</a>
       <button class="pma-btn pma-btn-sm" onclick="loadStats('{{ col.name }}')">📊 Stats</button>
       <a href="#search" class="pma-btn pma-btn-sm" onclick="document.getElementById('search-query').focus()">🔍 Search</a>
     </td>
