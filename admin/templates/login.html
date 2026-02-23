@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ragMyAdmin - Login</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: sans-serif; font-size: 13px; color: #333; background: #e7e7e7; }
+  
+  /* phpMyAdmin-style header */
+  .pma-header { background: #f3f3f3; border-bottom: 1px solid #ccc; padding: 4px 12px; display: flex; align-items: center; gap: 12px; }
+  .pma-header .logo { font-size: 16px; font-weight: bold; color: #235a81; }
+  .pma-header .logo span { color: #e87d0d; }
+  
+  /* Login form container */
+  .login-container { display: flex; justify-content: center; align-items: center; min-height: calc(100vh - 50px); }
+  
+  .login-box { background: #fff; border: 1px solid #ccc; border-radius: 5px; padding: 24px; width: 400px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+  
+  .login-title { font-size: 18px; color: #235a81; text-align: center; margin-bottom: 20px; padding-bottom: 8px; border-bottom: 2px solid #e87d0d; }
+  
+  .form-group { margin-bottom: 16px; }
+  .form-label { display: block; margin-bottom: 4px; font-weight: bold; color: #333; }
+  .form-input { width: 100%; padding: 8px 12px; border: 1px solid #aaa; border-radius: 3px; font-size: 13px; }
+  .form-input:focus { border-color: #235a81; outline: none; box-shadow: 0 0 3px rgba(35, 90, 129, 0.3); }
+  
+  .login-btn { width: 100%; padding: 10px; background: linear-gradient(to bottom, #4a90e2, #235a81); color: #fff; border: none; border-radius: 3px; font-size: 14px; font-weight: bold; cursor: pointer; margin-top: 8px; }
+  .login-btn:hover { background: linear-gradient(to bottom, #3a7bc8, #1e4a6b); }
+  .login-btn:disabled { background: #ccc; cursor: not-allowed; }
+  
+  .error-msg { background: #fdd; border: 1px solid #faa; color: #c00; padding: 8px 12px; border-radius: 3px; margin-bottom: 16px; font-size: 12px; }
+  .info-msg { background: #dff5e1; border: 1px solid #90d296; color: #2d6f36; padding: 8px 12px; border-radius: 3px; margin-bottom: 16px; font-size: 12px; }
+  
+  .security-notice { background: #fff5dd; border: 1px solid #ffd27f; padding: 12px; border-radius: 3px; margin-top: 20px; font-size: 11px; color: #666; }
+  .security-notice strong { color: #333; }
+  
+  .footer-note { text-align: center; margin-top: 16px; font-size: 11px; color: #888; }
+</style>
+</head>
+<body>
+  <div class="pma-header">
+    <div class="logo">🗄️ <span>rag</span>MyAdmin</div>
+  </div>
+  
+  <div class="login-container">
+    <div class="login-box">
+      <h1 class="login-title">🔐 ユーザー認証</h1>
+      
+      {% if error %}
+        <div class="error-msg">{{ error }}</div>
+      {% endif %}
+      
+      {% if info %}
+        <div class="info-msg">{{ info }}</div>
+      {% endif %}
+      
+      <form method="POST" action="{{ url_for('login') }}">
+        {% if csrf_token %}
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+        {% endif %}
+        <div class="form-group">
+          <label for="username" class="form-label">ユーザー名:</label>
+          <input type="text" id="username" name="username" class="form-input" 
+                 required maxlength="64" autocomplete="username"
+                 {% if username %}value="{{ username }}"{% endif %}>
+        </div>
+        
+        <div class="form-group">
+          <label for="password" class="form-label">パスワード:</label>
+          <input type="password" id="password" name="password" class="form-input" 
+                 required autocomplete="current-password">
+        </div>
+        
+        <button type="submit" class="login-btn">ログイン</button>
+      </form>
+      
+      <div class="security-notice">
+        <strong>セキュリティについて:</strong><br>
+        • ログイン失敗5回でアカウントロック（15分間）<br>
+        • セッションは1時間で自動失効<br>
+        • セキュリティイベント時にセッション無効化<br>
+        • Phase 1: admin以外は読み取り専用
+      </div>
+      
+      <div class="footer-note">
+        ragMyAdmin Permission System Phase 1
+      </div>
+    </div>
+  </div>
+</body>
+</html>

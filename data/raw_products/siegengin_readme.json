@@ -1,0 +1,8 @@
+{
+  "key": "siegengin_readme",
+  "origin": "https://github.com/goodsun/siegeNgin",
+  "title": "siegeNgin — README",
+  "date": "",
+  "body": "# siegeNgin - trebuchet -\n\nWalls are meant to be broken.\n\nブラウザを介しコラボレーションツールを利用してAIとの協働を行うツールです。\nUIで簡単にAIとの意思疎通を可能にします。\n\n![Trebuchet - Medieval Siege Engine](docs/images/trebuchet.jpg)\n\n*A trebuchet at Château de Castelnaud (Image: [ChrisO](https://commons.wikimedia.org/wiki/User:ChrisO), [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0), via Wikimedia Commons)*\n\n## 特徴\n\n- **ブラウザベースのUI** - コマンドライン不要\n- **マスター自動判定** - コミニュケーションツールを利用したユーザ判定\n- **インターフェース自動生成** - インターフェースファイルを自動出力\n\n## 名前の由来\n\n中世ヨーロッパで使われた「siege engine」（攻城兵器）は、\n難攻不落の城を攻略するための投石機やカタパルトでした。\nこの攻城兵器を操作する技術者を「ingeniator」と呼び、\nこれが現代の「engineer」（エンジニア）の語源となっています。\n\nAIとの協働によるソフトウェア開発は、その意思疎通の困難さによって人類にとってまるで難攻不落の「要塞」のようです。\nコマンドライン、設定ファイル、データベース、ネットワーク...これらの壁を乗り越えるのは大変な作業です。\nsiegeNginは、これら現代の要塞を攻略するための 新時代の「攻城兵器」として開発されました。\n誰もが簡単にブラウザベースのコラボレーションツールを利用てAIと意思疎通できる世界を実現します。\n\nAI開発の参入障壁という「城壁」を打ち破り、\nより多くの開発者がAIとの協働の世界に参加できることを願って、\nこのツールは作られました。\n\nエンジニアの語源に立ち返り、複雑な技術的障壁を打ち破る\n― それがsiegeNginに込められた想いです。",
+  "tags": "siegeNgin, README, bon-soleil, product"
+}

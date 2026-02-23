@@ -9,7 +9,7 @@
   <a href="{{ BASE }}/collection/{{ name }}">{{ name }}</a> <span>»</span>
   {% set parts = chunk.id.rsplit('_c', 1) %}
   {% if parts|length == 2 %}
-    <a href="{{ BASE }}/collection/{{ name }}/document/{{ parts[0] }}/edit">{{ parts[0] }}</a> <span>»</span>
+    <a href="{{ BASE }}/collection/{{ name }}/document/{{ parts[0] }}">{{ parts[0] }}</a> <span>»</span>
     c{{ parts[1] }}
   {% else %}
     {{ chunk.id }}
@@ -19,8 +19,14 @@
 <h2 class="pma-heading">📄 Chunk: <code>{{ chunk.id }}</code></h2>
 
 <div style="margin-bottom:12px">
+  {% if can_write %}
   <button class="pma-btn danger" onclick="deleteChunk()">🗑️ Drop</button>
-  <a href="{{ BASE }}/collection/{{ name }}" class="pma-btn">← Back to chunks</a>
+  {% endif %}
+  {% set parts = chunk.id.rsplit('_c', 1) %}
+  {% if parts|length == 2 %}
+  <a href="{{ BASE }}/collection/{{ name }}/document/{{ parts[0] }}" class="pma-btn">← Back to document</a>
+  {% endif %}
+  <a href="{{ BASE }}/collection/{{ name }}" class="pma-btn">← Back to {{ name }}</a>
 </div>
 
 <h3>ℹ️ Metadata</h3>
@@ -28,9 +34,36 @@
 <table class="pma-table" style="width:auto">
   {% for k, v in chunk.metadata.items()|sort %}
   <tr>
-    <th>{{ k }}</th>
-    <td>
-      {% if v is string and v.startswith('http') %}
+    <th{% if k.startswith('__') and k in ['__owner', '__permission', '__visibility', '__groups'] %} style="background:#e8f4f8;font-weight:bold"{% endif %}>{{ k }}</th>
+    <td{% if k.startswith('__') and k in ['__owner', '__permission', '__visibility', '__groups'] %} style="background:#e8f4f8"{% endif %}>
+      {% if k in ('key', '__key') and chunk.metadata.get('origin', chunk.metadata.get('__origin', '')) %}
+        <a href="{{ chunk.metadata.get('origin', chunk.metadata.get('__origin', '')) }}{{ v }}" target="_blank">{{ v }}</a>
+      {% elif k == '__permission' %}
+        <code>{{ v }}</code>
+        {% if v == '744' %}
+          <span style="font-size:11px;color:#666">(owner: rwx, group: r--, other: r--)</span>
+        {% elif v == '754' %}
+          <span style="font-size:11px;color:#666">(owner: rwx, group: r-x, other: r--)</span>
+        {% elif v == '644' %}
+          <span style="font-size:11px;color:#666">(owner: rw-, group: r--, other: r--)</span>
+        {% elif v == '640' %}
+          <span style="font-size:11px;color:#666">(owner: rw-, group: r--, other: ---)</span>
+        {% endif %}
+      {% elif k == '__visibility' %}
+        {% if v == 'private' %}
+          <span style="color:#d63031">🔒 {{ v }}</span>
+        {% else %}
+          <span style="color:#00b894">🌐 {{ v }}</span>
+        {% endif %}
+      {% elif k == '__owner' %}
+        <strong>{{ v }}</strong>
+      {% elif k == '__groups' %}
+        {% if v and v != '[]' %}
+          {{ v }}
+        {% else %}
+          <span style="color:#888">(no groups)</span>
+        {% endif %}
+      {% elif v is string and v.startswith('http') %}
         <a href="{{ v }}" target="_blank">{{ v }}</a>
       {% else %}
         {{ v }}
@@ -52,10 +85,14 @@
 </div>
 
 <h3>📝 Document Content <span style="font-weight:normal;font-size:11px;color:#888">(<span id="char-count">{{ chunk.document|length }}</span> chars)</span>
+  {% if can_write %}
   <button class="pma-btn pma-btn-sm" id="edit-toggle" onclick="toggleEdit()" style="margin-left:8px">✏️ Edit</button>
   <button class="pma-btn pma-btn-sm" id="save-btn" onclick="saveChunk()" style="margin-left:4px;display:none">💾 Save</button>
   <button class="pma-btn pma-btn-sm" id="cancel-btn" onclick="cancelEdit()" style="margin-left:4px;display:none">Cancel</button>
   <span id="save-status" style="font-size:11px;color:#666;margin-left:8px"></span>
+  {% else %}
+  <span style="font-size:11px;color:#888;margin-left:8px">({{ user_role }} - read only)</span>
+  {% endif %}
 </h3>
 <div class="chunk-content" id="content-view">{{ chunk.document }}</div>
 <textarea id="content-edit" style="display:none;width:100%;min-height:400px;padding:12px;font-family:monospace;font-size:12px;line-height:1.7;border:2px solid #235a81;border-radius:3px;background:#fffff0;resize:vertical" oninput="document.getElementById('char-count').textContent=this.value.length">{{ chunk.document }}</textarea>

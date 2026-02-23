@@ -12,7 +12,7 @@ from pathlib import Path
 
 # 設定
 NOTE_USERNAME = os.environ.get("NOTE_USERNAME", "flow_theory")
-RAW_DIR = Path(__file__).parent.parent / "data" / "raw"
+RAW_DIR = Path(os.environ.get("RAW_DIR", str(Path(__file__).parent.parent / "data" / "raw")))
 PER_PAGE = 6  # noteのAPIは6件固定で返す
 DELAY = 1  # API呼び出し間隔（秒）
 
@@ -85,6 +85,10 @@ def main():
         body_html = fetch_article_body(key)
         body_text = strip_html(body_html)
 
+        # タグ取得
+        hashtags = article.get("hashtags", [])
+        tags = ", ".join(h["hashtag"]["name"].lstrip("#") for h in hashtags if h.get("hashtag", {}).get("name"))
+
         # 保存
         record = {
             "id": article["id"],
@@ -93,6 +97,7 @@ def main():
             "url": f"https://note.com/{NOTE_USERNAME}/n/{key}",
             "published_at": article.get("publishAt", ""),
             "like_count": article.get("likeCount", 0),
+            "tags": tags,
             "body_text": body_text,
         }
         out_path = RAW_DIR / f"{key}.json"
