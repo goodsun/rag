@@ -21,12 +21,13 @@
 """
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
-RAW_DIR = Path(__file__).parent.parent / "data" / "raw"
-CHUNKS_DIR = Path(__file__).parent.parent / "data" / "chunks"
+RAW_DIR = Path(os.environ.get("RAW_DIR", str(Path(__file__).parent.parent / "data" / "raw")))
+CHUNKS_DIR = Path(os.environ.get("CHUNKS_DIR", str(Path(__file__).parent.parent / "data" / "chunks")))
 
 # チャンク設定
 CHUNK_SIZE = 600       # 目標文字数
@@ -122,7 +123,7 @@ def process_article(article: dict) -> list[dict]:
             doc_origin = doc_url[:doc_url.rfind("/" + doc_key) + 1]
     
     # __chunk_prefix: 指定があればそれを使う、なければ title でプレフィックス
-    chunk_prefix_spec = article.get("__chunk_prefix", "title")
+    chunk_prefix_spec = article.get("__chunk_prefix", "title, tags")
     
     # ユーザー定義メタデータ（標準 + スキップ対象以外）を収集
     skip_keys = {"id", "key", "title", "url", "date", "published_at", "like_count",

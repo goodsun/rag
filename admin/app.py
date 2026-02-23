@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
-"""ragMyAdmin — ChromaDB Web Frontend"""
+"""ragMyAdmin — ChromaDB Web Frontend with Permission System"""
 import os
 import sys
 import json
-from flask import Flask, render_template, request, jsonify
+from datetime import datetime
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session, flash, abort
+from flask_session import Session
+from flask_wtf.csrf import CSRFProtect
 import chromadb
+
+# Import authentication module
+from auth import (
+    require_auth, require_role, phase1_policy, 
+    check_rate_limit, log_login_attempt, verify_password, 
+    get_client_ip, get_user_info, LOCKOUT_MINUTES,
+    audit_log, check_chunk_permission, check_collection_permission
+)
 
 CHROMA_PATH = os.environ.get("CHROMA_PATH", os.path.join(os.path.dirname(__file__), "..", "chroma_db"))
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
@@ -24,12 +35,10 @@ def get_embed_fn():
         _embed_fn = FastEmbedFunction(EMBEDDING_MODEL)
     return _embed_fn
 
-
 def get_collection(name):
     """Get collection with embedding function for write operations."""
     client = get_client()
     return client.get_collection(name, embedding_function=get_embed_fn())
-
 
 def meta_title(meta):
     """Extract document title from metadata with fallback."""
@@ -37,7 +46,6 @@ def meta_title(meta):
         return ""
     return (meta.get("title") or meta.get("__title") or meta.get("document_title")
             or meta.get("article_title") or meta.get("source") or "")
-
 
 def meta_url(meta):
     """Extract source URL from metadata with fallback. Reconstructs from origin + key if needed."""
@@ -50,7 +58,6 @@ def meta_url(meta):
         return origin + key
     return (meta.get("url") or meta.get("__url") or meta.get("origin_url")
             or meta.get("article_url") or meta.get("source_url") or "")
-
 
 import re
 from functools import lru_cache
@@ -178,7 +185,6 @@ def detect_field_roles(metadatas):
     
     return roles
 
-
 # Cache per collection name
 _field_roles_cache = {}
 
@@ -191,7 +197,6 @@ def get_field_roles(col_name):
         _field_roles_cache[col_name] = detect_field_roles(sample["metadatas"])
     return _field_roles_cache[col_name]
 
-
 def smart_title(meta, roles):
     """Get title using detected role, with fallback."""
     if not meta:
@@ -202,11 +207,15 @@ def smart_title(meta, roles):
             return str(val)
     return meta_title(meta)
 
-
 def smart_url(meta, roles):
-    """Get URL using detected role, with fallback."""
+    """Get URL using detected role, with fallback. Always tries origin+key reconstruction first."""
     if not meta:
         return ""
+    # origin + key reconstruction takes priority (most reliable)
+    origin = meta.get("origin") or meta.get("__origin", "")
+    key = meta.get("key") or meta.get("__key", "")
+    if origin and key:
+        return origin + key
     if roles.get("url"):
         val = meta.get(roles["url"])
         if val:
@@ -214,8 +223,46 @@ def smart_url(meta, roles):
     return meta_url(meta)
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+
+# Security configuration
+app.secret_key = os.environ.get('SECRET_KEY') or os.urandom(32)
 app.config["APPLICATION_ROOT"] = os.environ.get("APP_ROOT", "/")
+
+# Flask-Session configuration
+app.config['SESSION_TYPE'] = 'filesystem'
+app.config['SESSION_FILE_DIR'] = os.path.join(os.path.dirname(__file__), 'sessions')
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SECURE'] = False  # Development - will be True in production with HTTPS
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 hour
+app.config['SESSION_COOKIE_NAME'] = 'ragmyadmin_session'
+
+# CSRF Protection
+app.config['WTF_CSRF_TIME_LIMIT'] = 3600  # 1 hour
+app.config['WTF_CSRF_SECRET_KEY'] = app.secret_key
+csrf = CSRFProtect(app)
+
+# Initialize Flask-Session
+Session(app)
+
+# Security headers
+@app.after_request
+def add_security_headers(response):
+    response.headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    return response
+
+# Phase 1 policy enforcement
+@app.before_request
+def enforce_security_policies():
+    # Skip auth for login page and static files
+    if request.endpoint in ['login', 'static']:
+        return
+    
+    # Apply Phase 1 policy
+    if 'username' in session:
+        phase1_policy()
 
 # Support reverse proxy with subpath
 class PrefixMiddleware:
@@ -230,7 +277,6 @@ class PrefixMiddleware:
                 environ["PATH_INFO"] = path[len(self.prefix):] or "/"
         return self.app(environ, start_response)
 
-
 BASE = os.environ.get("APP_ROOT", "").rstrip("/")
 
 def get_client():
@@ -238,108 +284,120 @@ def get_client():
 
 @app.context_processor
 def inject_base():
-    return {"BASE": BASE}
+    return {
+        "BASE": BASE,
+        "user_info": get_user_info(session.get('username')) if 'username' in session else None
+    }
 
+# Authentication routes
+@app.route("/login", methods=["GET", "POST"])
+@csrf.exempt  # Temporarily disable for testing
+def login():
+    if request.method == "POST":
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        client_ip = get_client_ip()
+        
+        if not username or not password:
+            return render_template('login.html', error='ユーザー名とパスワードを入力してください')
+        
+        # Check rate limiting
+        if not check_rate_limit(username, client_ip):
+            log_login_attempt(username, client_ip, success=False)
+            return render_template('login.html', 
+                error=f'ログイン試行回数が上限に達しました。{LOCKOUT_MINUTES}分後に再試行してください。',
+                username=username)
+        
+        # Verify credentials
+        user = verify_password(username, password)
+        if user:
+            # Successful login
+            log_login_attempt(username, client_ip, success=True)
+            
+            # Clear old session and create new one
+            session.clear()
+            session['username'] = user['username']
+            session['role'] = user['role']
+            session['groups'] = user['groups']
+            session['session_version'] = user['session_version']
+            session.permanent = True
+            
+            return redirect(url_for('index'))
+        else:
+            # Failed login
+            log_login_attempt(username, client_ip, success=False)
+            return render_template('login.html', 
+                error='ユーザー名またはパスワードが正しくありません',
+                username=username)
+    
+    return render_template('login.html')
 
+@app.route("/logout")
+@require_auth
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+# Main routes with authentication
 @app.route("/")
+@require_auth
 def index():
     client = get_client()
     collections = []
     for col in client.list_collections():
-        collections.append({"name": col.name, "count": col.count()})
+        count = col.count()
+        # Count unique documents (by key or __key metadata)
+        doc_count = 0
+        if count > 0:
+            try:
+                all_meta = col.get(include=["metadatas"])["metadatas"]
+                keys = set()
+                for m in all_meta:
+                    k = (m or {}).get("key") or (m or {}).get("__key") or ""
+                    if k:
+                        keys.add(k)
+                doc_count = len(keys) if keys else count
+            except Exception:
+                doc_count = count
+        collections.append({"name": col.name, "count": count, "doc_count": doc_count})
     return render_template("index.html", collections=collections)
 
-
 @app.route("/collection/<name>")
+@require_auth
 def collection_view(name):
-    client = get_client()
-    col = client.get_collection(name)
-    page = int(request.args.get("page", 1))
-    per_page = int(request.args.get("per_page", 50))
+    """Show document list for a collection (was /collection/<name>/documents)."""
+    # Get user info for permission checks
+    username = session['username']
+    user_info = get_user_info(username)
+    user_role = user_info['role']
+    user_groups = user_info['groups']
     
-    # Get total count
-    total = col.count()
+    # Check collection permission
+    if not check_collection_permission(name, username, user_role, required='r'):
+        abort(404)  # Hide resource existence
     
-    # Filter support
-    filter_key = request.args.get("filter", "")
-    
-    # Get chunk IDs
-    if filter_key:
-        # Get all and filter by ID prefix
-        all_result = col.get(include=["documents", "metadatas"])
-        filtered_ids = [i for i, doc_id in enumerate(all_result["ids"]) if doc_id.startswith(filter_key)]
-        total = len(filtered_ids)
-        start = (page - 1) * per_page
-        end = start + per_page
-        page_indices = filtered_ids[start:end]
-        result = {
-            "ids": [all_result["ids"][i] for i in page_indices],
-            "documents": [all_result["documents"][i] for i in page_indices],
-            "metadatas": [all_result["metadatas"][i] for i in page_indices],
-        }
-    else:
-        result = col.get(
-            limit=per_page,
-            offset=(page - 1) * per_page,
-            include=["documents", "metadatas"]
-        )
-    
-    roles = get_field_roles(name)
-    
-    chunks = []
-    for i, doc_id in enumerate(result["ids"]):
-        meta = result["metadatas"][i] if result["metadatas"] else {}
-        chunks.append({
-            "id": doc_id,
-            "document": result["documents"][i][:200] if result["documents"][i] else "",
-            "full_document": result["documents"][i] or "",
-            "metadata": meta,
-            "title": smart_title(meta, roles),
-            "url": smart_url(meta, roles),
-        })
-    
-    total_pages = (total + per_page - 1) // per_page
-    
-    return render_template("collection.html", current_collection=name, current_view="chunks",
-        name=name, chunks=chunks, total=total,
-        page=page, per_page=per_page, total_pages=total_pages)
-
-
-@app.route("/collection/<name>/chunk/<chunk_id>")
-def chunk_detail(name, chunk_id):
-    client = get_client()
-    col = client.get_collection(name)
-    result = col.get(ids=[chunk_id], include=["documents", "metadatas", "embeddings"])
-    
-    if not result["ids"]:
-        return "Chunk not found", 404
-    
-    chunk = {
-        "id": result["ids"][0],
-        "document": result["documents"][0],
-        "metadata": result["metadatas"][0] if result["metadatas"] else {},
-        "embedding_dim": len(result["embeddings"][0]) if result["embeddings"] is not None and len(result["embeddings"]) > 0 else 0,
-        "embedding_preview": list(result["embeddings"][0][:10]) if result["embeddings"] is not None and len(result["embeddings"]) > 0 else [],
-    }
-    
-    return render_template("chunk_detail.html", current_collection=name, current_view="chunk_detail", name=name, chunk=chunk)
-
-
-@app.route("/collection/<name>/documents")
-def documents_view(name):
     client = get_client()
     col = client.get_collection(name)
     all_data = col.get(include=["documents", "metadatas"])
     
     roles = get_field_roles(name)
     
-    # Group by document key (ID before _c)
+    # Group by document key (ID before _c), filtering by permissions
     articles = {}
+    total_filtered_chunks = 0
+    
     for i, doc_id in enumerate(all_data["ids"]):
+        meta = all_data["metadatas"][i] if all_data["metadatas"] else {}
+        
+        # Check chunk-level permission
+        if not check_chunk_permission(meta, username, user_role, user_groups, required='r'):
+            continue
+        
+        total_filtered_chunks += 1
         parts = doc_id.rsplit("_c", 1)
         art_key = parts[0] if len(parts) == 2 else doc_id
+        
         if art_key not in articles:
-            meta = all_data["metadatas"][i] if all_data["metadatas"] else {}
             date_field = roles.get("date") or "date"
             articles[art_key] = {
                 "key": art_key,
@@ -348,18 +406,125 @@ def documents_view(name):
                 "published_at": (meta or {}).get(date_field, ""),
                 "chunks": [],
                 "total_chars": 0,
+                "owner": meta.get('__owner', ''),
             }
         doc_len = len(all_data["documents"][i]) if all_data["documents"][i] else 0
         articles[art_key]["chunks"].append(doc_id)
         articles[art_key]["total_chars"] += doc_len
     
-    # Sort by published_at desc, then title
     sorted_articles = sorted(articles.values(), key=lambda a: a.get("published_at", ""), reverse=True)
     
-    return render_template("documents.html", current_collection=name, current_view="documents", name=name, documents=sorted_articles, total=len(sorted_articles))
+    return render_template("documents.html", current_collection=name, current_view="documents",
+        name=name, documents=sorted_articles, total=len(sorted_articles), chunk_total=total_filtered_chunks)
 
+@app.route("/collection/<name>/document/<doc_key>")
+@require_auth
+def document_chunks_view(name, doc_key):
+    """Show chunks belonging to a specific document."""
+    # Get user info for permission checks
+    username = session['username']
+    user_info = get_user_info(username)
+    user_role = user_info['role']
+    user_groups = user_info['groups']
+    
+    # Check collection permission
+    if not check_collection_permission(name, username, user_role, required='r'):
+        abort(404)  # Hide resource existence
+    
+    client = get_client()
+    col = client.get_collection(name)
+    all_result = col.get(include=["documents", "metadatas"])
+    
+    roles = get_field_roles(name)
+    
+    # Filter chunks belonging to this document with permission checks
+    chunks = []
+    doc_title = doc_key
+    for i, doc_id in enumerate(all_result["ids"]):
+        parts = doc_id.rsplit("_c", 1)
+        art_key = parts[0] if len(parts) == 2 else doc_id
+        if art_key == doc_key:
+            meta = all_result["metadatas"][i] if all_result["metadatas"] else {}
+            
+            # Check chunk-level permission
+            if not check_chunk_permission(meta, username, user_role, user_groups, required='r'):
+                continue
+            
+            if not chunks:
+                doc_title = smart_title(meta, roles) or doc_key
+            chunks.append({
+                "id": doc_id,
+                "document": all_result["documents"][i][:200] if all_result["documents"][i] else "",
+                "full_document": all_result["documents"][i] or "",
+                "metadata": meta,
+                "title": smart_title(meta, roles),
+                "url": smart_url(meta, roles),
+                "chunk_index": parts[1] if len(parts) == 2 else "",
+            })
+    
+    # If no accessible chunks found, return 404 
+    if not chunks:
+        abort(404)
+    
+    # Sort by chunk index
+    chunks.sort(key=lambda c: c.get("chunk_index", ""))
+    
+    return render_template("collection.html", current_collection=name, current_view="doc_chunks",
+        name=name, doc_key=doc_key, doc_title=doc_title, chunks=chunks, total=len(chunks))
+
+@app.route("/collection/<name>/chunk/<chunk_id>")
+@require_auth
+def chunk_detail(name, chunk_id):
+    # Get user info for permission checks
+    username = session['username']
+    user_info = get_user_info(username)
+    user_role = user_info['role']
+    user_groups = user_info['groups']
+    
+    # Check collection permission
+    if not check_collection_permission(name, username, user_role, required='r'):
+        abort(404)  # Hide resource existence
+    
+    client = get_client()
+    col = client.get_collection(name)
+    result = col.get(ids=[chunk_id], include=["documents", "metadatas", "embeddings"])
+    
+    if not result["ids"]:
+        abort(404)
+    
+    chunk_meta = result["metadatas"][0] if result["metadatas"] else {}
+    
+    # Check chunk-level permission
+    if not check_chunk_permission(chunk_meta, username, user_role, user_groups, required='r'):
+        abort(404)  # Hide resource existence
+    
+    chunk = {
+        "id": result["ids"][0],
+        "document": result["documents"][0],
+        "metadata": chunk_meta,
+        "embedding_dim": len(result["embeddings"][0]) if result["embeddings"] is not None and len(result["embeddings"]) > 0 else 0,
+        "embedding_preview": list(result["embeddings"][0][:10]) if result["embeddings"] is not None and len(result["embeddings"]) > 0 else [],
+    }
+    
+    # Check if user has write permission for editing/deleting
+    can_write = check_chunk_permission(chunk_meta, username, user_role, user_groups, required='w')
+    
+    return render_template("chunk_detail.html", 
+                         current_collection=name, 
+                         current_view="chunk_detail", 
+                         name=name, 
+                         chunk=chunk,
+                         user_role=user_role,
+                         can_write=can_write)
+
+@app.route("/collection/<name>/documents")
+@require_auth
+def documents_view(name):
+    """Legacy URL — redirect to collection view which now shows documents."""
+    return redirect(url_for("collection_view", name=name))
 
 @app.route("/collection/<name>/document/<doc_key>/edit")
+@require_auth
 def document_edit(name, doc_key):
     client = get_client()
     col = client.get_collection(name)
@@ -406,50 +571,91 @@ def document_edit(name, doc_key):
         name=name, doc_key=doc_key, title=title,
         chunks=chunks, full_text=full_text, meta_base=meta_base)
 
-
+# API routes with authentication
 @app.route("/api/collections")
+@csrf.exempt
+@require_auth
 def api_collections():
     """Return list of collections with counts."""
     client = get_client()
-    return jsonify([{"name": c.name, "count": c.count()} for c in client.list_collections()])
-
+    result = []
+    for c in client.list_collections():
+        count = c.count()
+        doc_count = 0
+        if count > 0:
+            try:
+                all_meta = c.get(include=["metadatas"])["metadatas"]
+                keys = set()
+                for m in all_meta:
+                    k = (m or {}).get("key") or (m or {}).get("__key") or ""
+                    if k:
+                        keys.add(k)
+                doc_count = len(keys) if keys else count
+            except Exception:
+                doc_count = count
+        result.append({"name": c.name, "count": count, "doc_count": doc_count})
+    return jsonify(result)
 
 @app.route("/api/roles/<name>")
+@require_auth
 def api_roles(name):
     """Return auto-detected field roles for a collection."""
     roles = get_field_roles(name)
     return jsonify(roles)
 
-
 @app.route("/api/search", methods=["POST"])
+@csrf.exempt
+@require_auth
 def api_search():
     data = request.json
     col_name = data.get("collection", "note_articles")
     query = data.get("query", "")
     n_results = int(data.get("n_results", 10))
     
+    # Get user info for permission checks
+    username = session['username']
+    user_info = get_user_info(username)
+    user_role = user_info['role']
+    user_groups = user_info['groups']
+    
+    # Check collection permission
+    if not check_collection_permission(col_name, username, user_role, required='r'):
+        return jsonify({"results": [], "query": query, "collection": col_name, "error": "No access to collection"})
+    
     client = get_client()
     col = client.get_collection(col_name)
     
+    # Get more results initially to account for filtering
+    search_limit = min(n_results * 3, 100)  # Request extra to account for filtering
+    
     results = col.query(
         query_texts=[query],
-        n_results=n_results,
+        n_results=search_limit,
         include=["documents", "metadatas", "distances"]
     )
     
     items = []
     for i, doc_id in enumerate(results["ids"][0]):
-        items.append({
-            "id": doc_id,
-            "document": results["documents"][0][i],
-            "metadata": results["metadatas"][0][i] if results["metadatas"] else {},
-            "distance": round(results["distances"][0][i], 4) if results["distances"] else None,
-        })
+        metadata = results["metadatas"][0][i] if results["metadatas"] else {}
+        
+        # Check chunk-level permission
+        if check_chunk_permission(metadata, username, user_role, user_groups, required='r'):
+            items.append({
+                "id": doc_id,
+                "document": results["documents"][0][i],
+                "metadata": metadata,
+                "distance": round(results["distances"][0][i], 4) if results["distances"] else None,
+            })
+            
+            # Stop when we have enough results
+            if len(items) >= n_results:
+                break
     
     return jsonify({"results": items, "query": query, "collection": col_name})
 
-
 @app.route("/api/update_chunk", methods=["POST"])
+@csrf.exempt
+@require_auth
 def api_update_chunk():
     data = request.json
     col_name = data.get("collection")
@@ -460,7 +666,42 @@ def api_update_chunk():
     if not col_name or not chunk_id or new_text is None:
         return jsonify({"error": "collection, id, and document required"}), 400
     
+    # Get user info for permission checks
+    username = session['username']
+    user_info = get_user_info(username)
+    user_role = user_info['role']
+    user_groups = user_info['groups']
+    
+    # Check collection permission
+    if not check_collection_permission(col_name, username, user_role, required='w'):
+        abort(404)  # Hide resource existence
+    
     col = get_collection(col_name)
+    
+    # Get current chunk metadata for permission check
+    try:
+        existing_chunk = col.get(ids=[chunk_id], include=['metadatas'])
+        if not existing_chunk['ids']:
+            abort(404)
+        
+        chunk_meta = existing_chunk['metadatas'][0] or {}
+    except:
+        abort(404)
+    
+    # Check chunk-level permission
+    if not check_chunk_permission(chunk_meta, username, user_role, user_groups, required='w'):
+        abort(404)  # Hide resource existence
+    
+    # Update chunk metadata to include editor info
+    if new_metadata:
+        if '__owner' not in new_metadata and '__owner' not in chunk_meta:
+            new_metadata['__owner'] = username
+        new_metadata['__modified_by'] = username
+        new_metadata['__modified_at'] = datetime.now().isoformat()
+    else:
+        new_metadata = chunk_meta.copy()
+        new_metadata['__modified_by'] = username
+        new_metadata['__modified_at'] = datetime.now().isoformat()
     
     update_kwargs = {"ids": [chunk_id], "documents": [new_text]}
     if new_metadata:
@@ -468,13 +709,17 @@ def api_update_chunk():
     
     col.update(**update_kwargs)
     
+    # Audit log
+    audit_log(username, 'edit', f'Updated chunk {chunk_id} in {col_name}', chunk_id)
+    
     # Clear field roles cache
     _field_roles_cache.pop(col_name, None)
     
     return jsonify({"updated": chunk_id, "new_length": len(new_text)})
 
-
 @app.route("/api/rechunk", methods=["POST"])
+@csrf.exempt
+@require_auth
 def api_rechunk():
     """Re-chunk a document: delete all chunks, re-split, re-embed."""
     data = request.json
@@ -488,11 +733,42 @@ def api_rechunk():
     if not col_name or not doc_key or not full_text:
         return jsonify({"error": "collection, document_key, and text required"}), 400
     
+    # Get user info for permission checks
+    username = session['username']
+    user_info = get_user_info(username)
+    user_role = user_info['role']
+    user_groups = user_info['groups']
+    
+    # Check collection permission - rechunking requires admin/editor
+    if not check_collection_permission(col_name, username, user_role, required='w'):
+        abort(404)  # Hide resource existence
+    
     col = get_collection(col_name)
     
-    # 1. Delete existing chunks for this document
+    # 1. Check permissions for existing chunks before deletion
     all_ids = col.get()["ids"]
     old_ids = [i for i in all_ids if i.startswith(doc_key + "_c")]
+    
+    # Check if user has permission to delete existing chunks
+    allowed_to_rechunk = True
+    if old_ids:
+        for chunk_id in old_ids:
+            try:
+                existing_chunk = col.get(ids=[chunk_id], include=['metadatas'])
+                if existing_chunk['ids']:
+                    chunk_meta = existing_chunk['metadatas'][0] or {}
+                    if not check_chunk_permission(chunk_meta, username, user_role, user_groups, required='w'):
+                        allowed_to_rechunk = False
+                        break
+            except:
+                # If we can't access the chunk, assume no permission
+                allowed_to_rechunk = False
+                break
+    
+    if not allowed_to_rechunk:
+        abort(404)  # User doesn't have permission to rechunk this document
+    
+    # Delete existing chunks
     if old_ids:
         col.delete(ids=old_ids)
     
@@ -517,7 +793,18 @@ def api_rechunk():
         if prefix_line:
             chunks = [f"【{prefix_line}】\n{c}" for c in chunks]
     
-    # 4. Add new chunks
+    # 4. Add ownership metadata to new chunks
+    for i in range(len(chunks)):
+        meta = dict(metadata_base)
+        meta["index"] = i
+        if '__owner' not in meta:
+            meta['__owner'] = username
+        meta['__created_by'] = username
+        meta['__created_at'] = datetime.now().isoformat()
+        metadata_base = meta
+        break
+    
+    # Create metadata for each chunk
     new_ids = [f"{doc_key}_c{i:03d}" for i in range(len(chunks))]
     new_metas = []
     for i in range(len(chunks)):
@@ -527,6 +814,9 @@ def api_rechunk():
     
     col.add(ids=new_ids, documents=chunks, metadatas=new_metas)
     
+    # Audit log
+    audit_log(username, 'rechunk', f'Re-chunked document {doc_key} in {col_name}: {len(old_ids)} -> {len(chunks)} chunks')
+    
     _field_roles_cache.pop(col_name, None)
     
     return jsonify({
@@ -535,8 +825,9 @@ def api_rechunk():
         "new_chunks": len(chunks),
     })
 
-
 @app.route("/api/delete", methods=["POST"])
+@csrf.exempt
+@require_auth
 def api_delete():
     data = request.json
     col_name = data.get("collection")
@@ -545,14 +836,46 @@ def api_delete():
     if not col_name or not chunk_ids:
         return jsonify({"error": "collection and ids required"}), 400
     
+    # Get user info for permission checks
+    username = session['username']
+    user_info = get_user_info(username)
+    user_role = user_info['role']
+    user_groups = user_info['groups']
+    
+    # Check collection permission
+    if not check_collection_permission(col_name, username, user_role, required='w'):
+        abort(404)  # Hide resource existence
+    
     client = get_client()
     col = client.get_collection(col_name)
-    col.delete(ids=chunk_ids)
     
-    return jsonify({"deleted": len(chunk_ids), "remaining": col.count()})
-
+    # Check permission for each chunk before deleting
+    allowed_ids = []
+    for chunk_id in chunk_ids:
+        try:
+            existing_chunk = col.get(ids=[chunk_id], include=['metadatas'])
+            if existing_chunk['ids']:
+                chunk_meta = existing_chunk['metadatas'][0] or {}
+                if check_chunk_permission(chunk_meta, username, user_role, user_groups, required='w'):
+                    allowed_ids.append(chunk_id)
+        except:
+            # Ignore chunks that don't exist or can't be accessed
+            continue
+    
+    if not allowed_ids:
+        abort(404)  # No chunks found or no permission
+    
+    # Delete only allowed chunks
+    col.delete(ids=allowed_ids)
+    
+    # Audit log for each deleted chunk
+    for chunk_id in allowed_ids:
+        audit_log(username, 'delete', f'Deleted chunk {chunk_id} from {col_name}', chunk_id)
+    
+    return jsonify({"deleted": len(allowed_ids), "remaining": col.count()})
 
 @app.route("/api/stats/<name>")
+@require_auth
 def api_stats(name):
     client = get_client()
     col = client.get_collection(name)
@@ -595,7 +918,6 @@ def api_stats(name):
         "sources": dict(sorted(sources.items(), key=lambda x: -x[1])[:30]),
         "doc_lengths": len_stats,
     })
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8792))

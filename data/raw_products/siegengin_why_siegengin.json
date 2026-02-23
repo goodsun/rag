@@ -1,0 +1,8 @@
+{
+  "key": "siegengin_why_siegengin",
+  "origin": "https://github.com/goodsun/siegeNgin",
+  "title": "siegeNgin — Why siegeNgin",
+  "date": "",
+  "body": "# WHY.md — なぜsiegeNginを作ったのか\n\n## PRI:130型認知との相性\n\n視覚・空間的把握が突出した認知スタイル（WAIS-IV PRI:130）にとって、「見えているものを言葉にする」コストは特に高い。頭の中で4K映像が流れているのに、言語出力が480p。\n\nsiegeNginは言語化を最小限にして、視覚的な「指さし」でAIに意図を伝える。GPU脳の出力先としてのAI。\n\n## 10年越しの城壁突破\n\n人間のデザイナーに「こういうUI」を伝えるのに10年かかっても伝わらなかったものが、AIとの協働で10分で形になった。言語化のボトルネックを迂回した瞬間だった。\n\n## 壁を溶かす\n\nsiegeNginの作者が一貫して取り組んできたのは「壁を溶かす」こと。\n\n- 地域の壁 → BizenDAO（web3 × 備前焼）\n- 技術の壁 → Vibe Coding\n- 構造の壁 → XPathGenie\n- 言語化の壁 → siegeNgin\n\nルーテッドコスモポリタニズム — 地域に根ざしながら世界に開く。siegeNginもまた、ローカルのAIアシスタントとグローバルなWebの間の壁を溶かすツール。",
+  "tags": "siegeNgin, Why siegeNgin, bon-soleil, product"
+}
