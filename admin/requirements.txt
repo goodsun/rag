@@ -1,0 +1,6 @@
+flask
+flask-session
+flask-wtf
+psycopg2-binary
+bcrypt
+pgvector

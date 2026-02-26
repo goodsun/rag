@@ -24,9 +24,7 @@ from auth import (
     get_audit_logs, get_audit_actions
 )
 
-DB_DSN = os.environ.get("DB_DSN", "dbname=bonsoleil user=teddy")
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/embed")
-EMBEDDING_MODEL = "nomic-embed-text"
+from config import DB_DSN, OLLAMA_URL, EMBEDDING_MODEL
 
 def get_db_conn():
     return psycopg2.connect(DB_DSN)
@@ -189,11 +187,13 @@ def get_field_roles(col_name):
     """Get or compute field roles for a collection."""
     if col_name not in _field_roles_cache:
         conn = get_db_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT metadata FROM rag.chunks WHERE collection=%s LIMIT 200", (col_name,))
-        metadatas = [r[0] for r in cur.fetchall()]
-        cur.close()
-        conn.close()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT metadata FROM rag.chunks WHERE collection=%s LIMIT 200", (col_name,))
+            metadatas = [r[0] for r in cur.fetchall()]
+        finally:
+            cur.close()
+            conn.close()
         _field_roles_cache[col_name] = detect_field_roles(metadatas)
     return _field_roles_cache[col_name]
 
@@ -359,18 +359,20 @@ def logout():
 @require_auth
 def index():
     conn = get_db_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT name FROM rag.collections ORDER BY name")
-    col_names = [r[0] for r in cur.fetchall()]
-    collections = []
-    for col_name in col_names:
-        cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE collection = %s", (col_name,))
-        count = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(DISTINCT doc_key) FROM rag.chunks WHERE collection = %s", (col_name,))
-        doc_count = cur.fetchone()[0]
-        collections.append({"name": col_name, "count": count, "doc_count": doc_count})
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM rag.collections ORDER BY name")
+        col_names = [r[0] for r in cur.fetchall()]
+        collections = []
+        for col_name in col_names:
+            cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE collection = %s", (col_name,))
+            count = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(DISTINCT doc_key) FROM rag.chunks WHERE collection = %s", (col_name,))
+            doc_count = cur.fetchone()[0]
+            collections.append({"name": col_name, "count": count, "doc_count": doc_count})
+    finally:
+        cur.close()
+        conn.close()
     return render_template("index.html", collections=collections)
 
 @app.route("/collection/<name>")
@@ -388,14 +390,16 @@ def collection_view(name):
         abort(404)  # Hide resource existence
     
     conn = get_db_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, doc_key, content, title, url, date, chunk_index, metadata
-        FROM rag.chunks WHERE collection = %s ORDER BY doc_key, chunk_index
-    """, (name,))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, doc_key, content, title, url, date, chunk_index, metadata
+            FROM rag.chunks WHERE collection = %s ORDER BY doc_key, chunk_index
+        """, (name,))
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
 
     # Convert rows to all_data format
     all_data = {
@@ -458,14 +462,16 @@ def document_chunks_view(name, doc_key):
         abort(404)  # Hide resource existence
     
     conn = get_db_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, doc_key, content, title, url, date, chunk_index, metadata
-        FROM rag.chunks WHERE collection = %s AND doc_key = %s ORDER BY chunk_index
-    """, (name, doc_key))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, doc_key, content, title, url, date, chunk_index, metadata
+            FROM rag.chunks WHERE collection = %s AND doc_key = %s ORDER BY chunk_index
+        """, (name, doc_key))
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
 
     roles = get_field_roles(name)
     
@@ -516,14 +522,16 @@ def chunk_detail(name, chunk_id):
         abort(404)  # Hide resource existence
     
     conn = get_db_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, content, metadata, embedding
-        FROM rag.chunks WHERE id = %s AND collection = %s
-    """, (chunk_id, name))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, content, metadata, embedding
+            FROM rag.chunks WHERE id = %s AND collection = %s
+        """, (chunk_id, name))
+        row = cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
 
     if not row:
         abort(404)
@@ -586,14 +594,16 @@ def document_edit(name, doc_key):
     roles = get_field_roles(name)
 
     conn = get_db_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, content, metadata, chunk_index
-        FROM rag.chunks WHERE collection = %s AND doc_key = %s ORDER BY chunk_index
-    """, (name, doc_key))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, content, metadata, chunk_index
+            FROM rag.chunks WHERE collection = %s AND doc_key = %s ORDER BY chunk_index
+        """, (name, doc_key))
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
 
     chunks = []
     meta_base = {}
@@ -652,18 +662,20 @@ def document_edit(name, doc_key):
 def api_collections():
     """Return list of collections with counts."""
     conn = get_db_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT name FROM rag.collections ORDER BY name")
-    col_names = [r[0] for r in cur.fetchall()]
-    result = []
-    for col_name in col_names:
-        cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE collection = %s", (col_name,))
-        count = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(DISTINCT doc_key) FROM rag.chunks WHERE collection = %s", (col_name,))
-        doc_count = cur.fetchone()[0]
-        result.append({"name": col_name, "count": count, "doc_count": doc_count})
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM rag.collections ORDER BY name")
+        col_names = [r[0] for r in cur.fetchall()]
+        result = []
+        for col_name in col_names:
+            cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE collection = %s", (col_name,))
+            count = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(DISTINCT doc_key) FROM rag.chunks WHERE collection = %s", (col_name,))
+            doc_count = cur.fetchone()[0]
+            result.append({"name": col_name, "count": count, "doc_count": doc_count})
+    finally:
+        cur.close()
+        conn.close()
     return jsonify(result)
 
 @app.route("/api/roles/<name>")
@@ -696,18 +708,20 @@ def api_search():
     emb = get_embeddings([query])[0]
 
     conn = get_db_conn()
-    cur = conn.cursor()
-    # Get extra results to account for permission filtering
-    search_limit = min(n_results * 3, 100)
-    cur.execute("""
-        SELECT id, content, metadata, 1-(embedding <=> %s::vector) AS score
-        FROM rag.chunks WHERE collection = %s
-        AND (metadata->>'__visibility' IS NULL OR metadata->>'__visibility' != 'private')
-        ORDER BY embedding <=> %s::vector LIMIT %s
-    """, (json.dumps(emb), col_name, json.dumps(emb), search_limit))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        # Get extra results to account for permission filtering
+        search_limit = min(n_results * 3, 100)
+        cur.execute("""
+            SELECT id, content, metadata, 1-(embedding <=> %s::vector) AS score
+            FROM rag.chunks WHERE collection = %s
+            AND (metadata->>'__visibility' IS NULL OR metadata->>'__visibility' != 'private')
+            ORDER BY embedding <=> %s::vector LIMIT %s
+        """, (json.dumps(emb), col_name, json.dumps(emb), search_limit))
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
     
     items = []
     for row in rows:
@@ -754,44 +768,42 @@ def api_update_chunk():
             abort(404)  # Hide resource existence
         
         conn = get_db_conn()
-        cur = conn.cursor()
+        try:
+            cur = conn.cursor()
 
-        # Get current chunk metadata for permission check
-        cur.execute("SELECT metadata FROM rag.chunks WHERE id = %s AND collection = %s", (chunk_id, col_name))
-        existing = cur.fetchone()
-        if not existing:
+            # Get current chunk metadata for permission check
+            cur.execute("SELECT metadata FROM rag.chunks WHERE id = %s AND collection = %s", (chunk_id, col_name))
+            existing = cur.fetchone()
+            if not existing:
+                abort(404)
+            
+            chunk_meta = existing[0] or {}
+            
+            # Check chunk-level permission
+            if not check_chunk_permission(chunk_meta, username, user_role, user_groups, required='w'):
+                abort(404)  # Hide resource existence
+            
+            # Update chunk metadata to include editor info
+            if new_metadata:
+                if '__owner' not in new_metadata and '__owner' not in chunk_meta:
+                    new_metadata['__owner'] = username
+                new_metadata['__modified_by'] = username
+                new_metadata['__modified_at'] = datetime.now().isoformat()
+            else:
+                new_metadata = chunk_meta.copy()
+                new_metadata['__modified_by'] = username
+                new_metadata['__modified_at'] = datetime.now().isoformat()
+            
+            # Re-embed
+            emb = get_embeddings([new_text])[0]
+            cur.execute("""
+                UPDATE rag.chunks SET content=%s, embedding=%s::vector, metadata=%s::jsonb, updated_at=now()
+                WHERE id=%s AND collection=%s
+            """, (new_text, json.dumps(emb), json.dumps(new_metadata), chunk_id, col_name))
+            conn.commit()
+        finally:
             cur.close()
             conn.close()
-            abort(404)
-        
-        chunk_meta = existing[0] or {}
-        
-        # Check chunk-level permission
-        if not check_chunk_permission(chunk_meta, username, user_role, user_groups, required='w'):
-            cur.close()
-            conn.close()
-            abort(404)  # Hide resource existence
-        
-        # Update chunk metadata to include editor info
-        if new_metadata:
-            if '__owner' not in new_metadata and '__owner' not in chunk_meta:
-                new_metadata['__owner'] = username
-            new_metadata['__modified_by'] = username
-            new_metadata['__modified_at'] = datetime.now().isoformat()
-        else:
-            new_metadata = chunk_meta.copy()
-            new_metadata['__modified_by'] = username
-            new_metadata['__modified_at'] = datetime.now().isoformat()
-        
-        # Re-embed
-        emb = get_embeddings([new_text])[0]
-        cur.execute("""
-            UPDATE rag.chunks SET content=%s, embedding=%s::vector, metadata=%s::jsonb, updated_at=now()
-            WHERE id=%s AND collection=%s
-        """, (new_text, json.dumps(emb), json.dumps(new_metadata), chunk_id, col_name))
-        conn.commit()
-        cur.close()
-        conn.close()
         
         # Audit log
         audit_log(username, 'edit', {'action': 'update_chunk', 'collection': col_name, 'chunk_id': chunk_id}, target=chunk_id)
@@ -832,12 +844,16 @@ def api_rechunk():
         if not check_collection_permission(col_name, username, user_role, required='w'):
             abort(404)  # Hide resource existence
         
-        conn = get_db_conn()
-        cur = conn.cursor()
-
         # 1. Get existing chunks and check permissions
-        cur.execute("SELECT id, metadata FROM rag.chunks WHERE collection = %s AND doc_key = %s", (col_name, doc_key))
-        existing_rows = cur.fetchall()
+        conn = get_db_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id, metadata FROM rag.chunks WHERE collection = %s AND doc_key = %s", (col_name, doc_key))
+            existing_rows = cur.fetchall()
+        finally:
+            cur.close()
+            conn.close()
+
         old_ids = [r[0] for r in existing_rows]
 
         allowed_to_rechunk = True
@@ -848,13 +864,7 @@ def api_rechunk():
                 break
         
         if not allowed_to_rechunk:
-            cur.close()
-            conn.close()
             abort(404)  # User doesn't have permission to rechunk this document
-        
-        # Delete existing chunks
-        if old_ids:
-            cur.execute("DELETE FROM rag.chunks WHERE id = ANY(%s) AND collection = %s", (old_ids, col_name))
         
         # 2. Paragraph-aware chunking
         chunks = []
@@ -894,20 +904,27 @@ def api_rechunk():
             m['__created_at'] = datetime.now().isoformat()
             new_metas.append(m)
         
-        # 5. Re-embed all chunks
+        # 5. Re-embed all chunks FIRST (before any DELETE — embedding failure won't lose data)
         embeddings = get_embeddings(chunks)
 
-        # 6. Insert new chunks
-        for i, (chunk_text, emb, meta) in enumerate(zip(chunks, embeddings, new_metas)):
-            new_id = f"{doc_key}_c{i:03d}"
-            cur.execute("""
-                INSERT INTO rag.chunks (id, collection, doc_key, content, embedding, metadata, chunk_index, total)
-                VALUES (%s, %s, %s, %s, %s::vector, %s::jsonb, %s, %s)
-            """, (new_id, col_name, doc_key, chunk_text, json.dumps(emb), json.dumps(meta), i, len(chunks)))
-        
-        conn.commit()
-        cur.close()
-        conn.close()
+        # 6. Delete existing chunks, then insert new chunks
+        conn = get_db_conn()
+        try:
+            cur = conn.cursor()
+            if old_ids:
+                cur.execute("DELETE FROM rag.chunks WHERE id = ANY(%s) AND collection = %s", (old_ids, col_name))
+            
+            for i, (chunk_text, emb, meta) in enumerate(zip(chunks, embeddings, new_metas)):
+                new_id = f"{doc_key}_c{i:03d}"
+                cur.execute("""
+                    INSERT INTO rag.chunks (id, collection, doc_key, content, embedding, metadata, chunk_index, total)
+                    VALUES (%s, %s, %s, %s, %s::vector, %s::jsonb, %s, %s)
+                """, (new_id, col_name, doc_key, chunk_text, json.dumps(emb), json.dumps(meta), i, len(chunks)))
+            
+            conn.commit()
+        finally:
+            cur.close()
+            conn.close()
         
         # Audit log
         audit_log(username, 'rechunk', {'action': 'rechunk_document', 'collection': col_name, 'document_key': doc_key, 'old_chunks': len(old_ids), 'new_chunks': len(chunks)}, target=doc_key)
@@ -947,33 +964,33 @@ def api_delete():
             abort(404)  # Hide resource existence
         
         conn = get_db_conn()
-        cur = conn.cursor()
+        try:
+            cur = conn.cursor()
 
-        # Check permission for each chunk before deleting
-        allowed_ids = []
-        for chunk_id in chunk_ids:
-            cur.execute("SELECT metadata FROM rag.chunks WHERE id = %s AND collection = %s", (chunk_id, col_name))
-            row = cur.fetchone()
-            if row:
-                chunk_meta = row[0] or {}
-                if check_chunk_permission(chunk_meta, username, user_role, user_groups, required='w'):
-                    allowed_ids.append(chunk_id)
-        
-        if not allowed_ids:
+            # Check permission for each chunk before deleting
+            allowed_ids = []
+            for chunk_id in chunk_ids:
+                cur.execute("SELECT metadata FROM rag.chunks WHERE id = %s AND collection = %s", (chunk_id, col_name))
+                row = cur.fetchone()
+                if row:
+                    chunk_meta = row[0] or {}
+                    if check_chunk_permission(chunk_meta, username, user_role, user_groups, required='w'):
+                        allowed_ids.append(chunk_id)
+            
+            if not allowed_ids:
+                abort(404)  # No chunks found or no permission
+            
+            # Delete only allowed chunks
+            cur.execute("DELETE FROM rag.chunks WHERE id = ANY(%s) AND collection = %s", (allowed_ids, col_name))
+            
+            # Get remaining count
+            cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE collection = %s", (col_name,))
+            remaining = cur.fetchone()[0]
+
+            conn.commit()
+        finally:
             cur.close()
             conn.close()
-            abort(404)  # No chunks found or no permission
-        
-        # Delete only allowed chunks
-        cur.execute("DELETE FROM rag.chunks WHERE id = ANY(%s) AND collection = %s", (allowed_ids, col_name))
-        
-        # Get remaining count
-        cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE collection = %s", (col_name,))
-        remaining = cur.fetchone()[0]
-
-        conn.commit()
-        cur.close()
-        conn.close()
         
         # Audit log for each deleted chunk
         for chunk_id in allowed_ids:
@@ -989,20 +1006,22 @@ def api_delete():
 @require_auth
 def api_stats(name):
     conn = get_db_conn()
-    cur = conn.cursor()
-    
-    cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE collection=%s", (name,))
-    count = cur.fetchone()[0]
-    
-    # Get metadata keys
-    cur.execute("SELECT DISTINCT jsonb_object_keys(metadata) FROM rag.chunks WHERE collection=%s LIMIT 200", (name,))
-    meta_keys = sorted(set(r[0] for r in cur.fetchall()))
-    
-    # Get source distribution and doc length stats
-    cur.execute("SELECT content, metadata FROM rag.chunks WHERE collection=%s", (name,))
-    all_rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        
+        cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE collection=%s", (name,))
+        count = cur.fetchone()[0]
+        
+        # Get metadata keys
+        cur.execute("SELECT DISTINCT jsonb_object_keys(metadata) FROM rag.chunks WHERE collection=%s LIMIT 200", (name,))
+        meta_keys = sorted(set(r[0] for r in cur.fetchall()))
+        
+        # Get source distribution and doc length stats
+        cur.execute("SELECT content, metadata FROM rag.chunks WHERE collection=%s", (name,))
+        all_rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
 
     sources = {}
     doc_lengths = []

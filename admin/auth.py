@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 from flask import request, session, redirect, url_for, abort
 
-DB_DSN = os.environ.get("DB_DSN", "dbname=bonsoleil user=teddy")
+from config import DB_DSN
 
 # Rate limiting configuration
 MAX_ATTEMPTS = 5
