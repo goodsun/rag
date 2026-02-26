@@ -1,45 +1,56 @@
 #!/usr/bin/env python3
-"""RAG検索CLI — テディがexecで呼び出す用"""
+"""RAG検索CLI — pgvector + ollama nomic-embed-text版"""
 
 import json
 import sys
-import chromadb
-from fastembed import TextEmbedding
-from pathlib import Path
+import urllib.request
 
-CHROMA_DIR = str(Path(__file__).parent.parent / "chroma_db")
-COLLECTION_NAME = "note_articles"
-MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+import psycopg2
 
-
-class FastEmbedFunction(chromadb.EmbeddingFunction):
-    def __init__(self, model_name: str):
-        self.model = TextEmbedding(model_name)
-    def __call__(self, input: list[str]) -> list[list[float]]:
-        return [e.tolist() for e in self.model.embed(input)]
+DB_DSN = "dbname=bonsoleil user=teddy"
+OLLAMA_URL = "http://localhost:11434/api/embed"
+EMBEDDING_MODEL = "nomic-embed-text"
+DEFAULT_COLLECTION = "teddy_notes"
 
 
-def search(query: str, n: int = 5):
-    ef = FastEmbedFunction(MODEL)
-    client = chromadb.PersistentClient(path=CHROMA_DIR)
-    col = client.get_collection(name=COLLECTION_NAME, embedding_function=ef)
+def get_embedding(text: str) -> list[float]:
+    data = json.dumps({"model": EMBEDDING_MODEL, "input": [text]}).encode()
+    req = urllib.request.Request(OLLAMA_URL, data=data, headers={"Content-Type": "application/json"})
+    res = urllib.request.urlopen(req, timeout=30)
+    return json.loads(res.read())["embeddings"][0]
 
-    results = col.query(query_texts=[query], n_results=n)
-    items = []
-    for doc, meta, dist in zip(
-        results["documents"][0], results["metadatas"][0], results["distances"][0]
-    ):
-        items.append({
-            "distance": round(dist, 4),
-            "title": meta.get('title', ''),
-            "url": (meta.get('origin','') + meta.get('key','')),
-            "text": doc[:300],
-        })
-    return items
+
+def search(query: str, n: int = 5, collection: str = DEFAULT_COLLECTION):
+    emb = get_embedding(query)
+    conn = psycopg2.connect(DB_DSN)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            title,
+            url,
+            1 - (embedding <=> %s::vector) AS score,
+            content
+        FROM rag.chunks
+        WHERE collection = %s
+        ORDER BY embedding <=> %s::vector
+        LIMIT %s
+    """, (json.dumps(emb), collection, json.dumps(emb), n))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    return [
+        {
+            "score": round(score, 4),
+            "title": title,
+            "url": url,
+            "text": content[:300],
+        }
+        for title, url, score, content in rows
+    ]
 
 
 if __name__ == "__main__":
     query = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "法華経"
-    n = 5
-    results = search(query, n)
+    results = search(query)
     print(json.dumps(results, ensure_ascii=False, indent=2))

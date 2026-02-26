@@ -25,20 +25,10 @@ def get_db():
         sys.exit(1)
     return sqlite3.connect(DB_PATH)
 
-def validate_password(password: str) -> tuple[bool, str]:
-    """Validate password against policy"""
-    if len(password) < PASSWORD_MIN_LENGTH:
-        return False, f"パスワードは{PASSWORD_MIN_LENGTH}文字以上必要です"
-    
-    if PASSWORD_REQUIRE_MIXED:
-        if not re.search(r'[a-z]', password):
-            return False, "小文字を含めてください"
-        if not re.search(r'[A-Z]', password):
-            return False, "大文字を含めてください"
-        if not re.search(r'[0-9]', password):
-            return False, "数字を含めてください"
-    
-    return True, ""
+# Import validate_password from auth module for consistency
+import sys
+sys.path.insert(0, os.path.dirname(__file__))
+from auth import validate_password
 
 def validate_username(username: str) -> tuple[bool, str]:
     """Validate username format"""

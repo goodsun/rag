@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Authentication module for ragMyAdmin"""
 import os
-import sqlite3
+import psycopg2
+import psycopg2.extras
+import psycopg2.errors
 import bcrypt
 import json
 import ipaddress
@@ -10,7 +12,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 from flask import request, session, redirect, url_for, abort
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "..", "users.db")
+DB_DSN = os.environ.get("DB_DSN", "dbname=bonsoleil user=teddy")
 
 # Rate limiting configuration
 MAX_ATTEMPTS = 5
@@ -18,7 +20,7 @@ LOCKOUT_MINUTES = 15
 
 def get_db():
     """Get database connection"""
-    return sqlite3.connect(DB_PATH)
+    return psycopg2.connect(DB_DSN)
 
 def sanitize_ip(raw_ip):
     """Extract safe IP address from X-Forwarded-For or remote address"""
@@ -63,55 +65,71 @@ def check_rate_limit(username, ip_address):
     """Check if user/IP has exceeded rate limit"""
     cutoff = f'-{LOCKOUT_MINUTES} minutes'
     
-    with get_db() as conn:
+    conn = get_db()
+    try:
+        cur = conn.cursor()
         # Check user-based attempts
-        user_attempts = conn.execute("""
-            SELECT COUNT(*) FROM login_attempts
-            WHERE username = ? AND success = 0 AND created_at > datetime('now', 'utc', ?)
-        """, (username, cutoff)).fetchone()[0]
+        cur.execute("""
+            SELECT COUNT(*) FROM shared.login_attempts
+            WHERE username = %s AND success = false AND created_at > now() - interval %s
+        """, (username, f'{LOCKOUT_MINUTES} minutes'))
+        user_attempts = cur.fetchone()[0]
         
         # Check IP-based attempts (higher threshold to prevent collateral damage)
-        ip_attempts = conn.execute("""
-            SELECT COUNT(*) FROM login_attempts
-            WHERE ip_address = ? AND success = 0 AND created_at > datetime('now', 'utc', ?)
-        """, (ip_address, cutoff)).fetchone()[0]
+        cur.execute("""
+            SELECT COUNT(*) FROM shared.login_attempts
+            WHERE ip_address = %s AND success = false AND created_at > now() - interval %s
+        """, (ip_address, f'{LOCKOUT_MINUTES} minutes'))
+        ip_attempts = cur.fetchone()[0]
         
         return user_attempts < MAX_ATTEMPTS and ip_attempts < MAX_ATTEMPTS * 3
+    finally:
+        conn.close()
 
 def log_login_attempt(username, ip_address, success=False):
     """Log login attempt for rate limiting and audit"""
-    with get_db() as conn:
+    conn = get_db()
+    try:
+        cur = conn.cursor()
         # Log attempt
-        conn.execute("""
-            INSERT INTO login_attempts (username, ip_address, success, created_at)
-            VALUES (?, ?, ?, datetime('now', 'utc'))
-        """, (username, ip_address, 1 if success else 0))
+        cur.execute("""
+            INSERT INTO shared.login_attempts (username, ip_address, success)
+            VALUES (%s, %s, %s)
+        """, (username, ip_address, success))
         
         # Get user_id for audit log
-        user = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+        cur.execute("SELECT id FROM shared.users WHERE username = %s", (username,))
+        user = cur.fetchone()
         user_id = user[0] if user else 0
         
         # Add audit log
         action = 'login' if success else 'login_failed'
-        conn.execute("""
-            INSERT INTO audit_log (user_id, username, action, ip_address, created_at)
-            VALUES (?, ?, ?, ?, datetime('now', 'utc'))
+        cur.execute("""
+            INSERT INTO shared.audit_log (user_id, username, action, ip_address)
+            VALUES (%s, %s, %s, %s)
         """, (user_id, username, action, ip_address))
         
         if success:
             # Clear failed attempts for this user on successful login
-            conn.execute("""
-                DELETE FROM login_attempts 
-                WHERE username = ? AND success = 0
+            cur.execute("""
+                DELETE FROM shared.login_attempts 
+                WHERE username = %s AND success = false
             """, (username,))
+        
+        conn.commit()
+    finally:
+        conn.close()
 
 def verify_password(username, password):
     """Verify username and password"""
-    with get_db() as conn:
-        user = conn.execute("""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
             SELECT id, password_hash, role, groups, session_version
-            FROM users WHERE username = ?
-        """, (username,)).fetchone()
+            FROM shared.users WHERE username = %s
+        """, (username,))
+        user = cur.fetchone()
         
         if not user:
             return None
@@ -128,6 +146,8 @@ def verify_password(username, password):
             }
         
         return None
+    finally:
+        conn.close()
 
 def require_auth(f):
     """Decorator to require authentication"""
@@ -142,10 +162,13 @@ def require_auth(f):
         
         # Check session version (security event invalidation)
         if 'session_version' in session:
-            with get_db() as conn:
-                current_version = conn.execute("""
-                    SELECT session_version FROM users WHERE username = ?
-                """, (session['username'],)).fetchone()
+            conn = get_db()
+            try:
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT session_version FROM shared.users WHERE username = %s
+                """, (session['username'],))
+                current_version = cur.fetchone()
                 
                 if not current_version or current_version[0] != session['session_version']:
                     session.clear()
@@ -153,6 +176,8 @@ def require_auth(f):
                         from flask import jsonify
                         return jsonify({"error": "Session expired"}), 401
                     return redirect(url_for('login'))
+            finally:
+                conn.close()
         
         return f(*args, **kwargs)
     return decorated_function
@@ -183,11 +208,14 @@ def phase1_policy():
 
 def get_user_info(username):
     """Get user information"""
-    with get_db() as conn:
-        user = conn.execute("""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
             SELECT id, username, role, groups, created_at, updated_at
-            FROM users WHERE username = ?
-        """, (username,)).fetchone()
+            FROM shared.users WHERE username = %s
+        """, (username,))
+        user = cur.fetchone()
         
         if not user:
             return None
@@ -196,10 +224,12 @@ def get_user_info(username):
             'id': user[0],
             'username': user[1],
             'role': user[2],
-            'groups': json.loads(user[3]) if user[3] else [],
+            'groups': user[3] if user[3] is not None else [],
             'created_at': user[4],
             'updated_at': user[5]
         }
+    finally:
+        conn.close()
 
 def audit_log(username, action, detail=None, target=None):
     """Add entry to audit log
@@ -212,9 +242,12 @@ def audit_log(username, action, detail=None, target=None):
     """
     ip_address = get_client_ip()
     
-    with get_db() as conn:
+    conn = get_db()
+    try:
+        cur = conn.cursor()
         # Get user_id
-        user = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+        cur.execute("SELECT id FROM shared.users WHERE username = %s", (username,))
+        user = cur.fetchone()
         user_id = user[0] if user else 0
         
         # Convert non-string detail to JSON
@@ -225,10 +258,13 @@ def audit_log(username, action, detail=None, target=None):
         if detail and len(detail) > 4096:
             detail = detail[:4093] + "..."
         
-        conn.execute("""
-            INSERT INTO audit_log (user_id, username, action, detail, target, ip_address, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, datetime('now', 'utc'))
+        cur.execute("""
+            INSERT INTO shared.audit_log (user_id, username, action, detail, target, ip_address)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """, (user_id, username, action, detail, target, ip_address))
+        conn.commit()
+    finally:
+        conn.close()
 
 def check_chunk_permission(chunk_meta, username, user_role, user_groups, required='r'):
     """Check if user has permission to access chunk
@@ -307,26 +343,36 @@ def check_collection_permission(col_name, username, user_role, required='r'):
 
 def get_all_users():
     """Get all users for admin interface"""
-    with get_db() as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute("""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
             SELECT id, username, role, groups, created_at, updated_at
-            FROM users 
+            FROM shared.users 
             ORDER BY username
         """)
-        return [dict(row) for row in cursor.fetchall()]
+        cols = [desc[0] for desc in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+    finally:
+        conn.close()
 
 def get_user_by_id(user_id):
     """Get user by ID"""
-    with get_db() as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute("""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
             SELECT id, username, role, groups, created_at, updated_at
-            FROM users 
-            WHERE id = ?
+            FROM shared.users 
+            WHERE id = %s
         """, (user_id,))
-        row = cursor.fetchone()
-        return dict(row) if row else None
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = [desc[0] for desc in cur.description]
+        return dict(zip(cols, row))
+    finally:
+        conn.close()
 
 def create_user(username, password, role, groups):
     """Create a new user"""
@@ -377,14 +423,17 @@ def create_user(username, password, role, groups):
     # Hash password
     password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
     
-    with get_db() as conn:
+    conn = get_db()
+    try:
+        cur = conn.cursor()
         try:
-            cursor = conn.execute("""
-                INSERT INTO users (username, password_hash, role, groups)
-                VALUES (?, ?, ?, ?)
+            cur.execute("""
+                INSERT INTO shared.users (username, password_hash, role, groups)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
             """, (username, password_hash, role, groups_json))
             
-            user_id = cursor.lastrowid
+            user_id = cur.fetchone()[0]
             conn.commit()
             
             # Log creation (after commit so audit_log's separate connection can see the user)
@@ -395,8 +444,11 @@ def create_user(username, password, role, groups):
             
             return True, "ユーザーが作成されました"
             
-        except sqlite3.IntegrityError:
+        except psycopg2.errors.UniqueViolation:
+            conn.rollback()
             return False, "ユーザー名が既に存在します"
+    finally:
+        conn.close()
 
 def update_user_password(user_id, new_password, admin_username):
     """Update user password"""
@@ -415,18 +467,24 @@ def update_user_password(user_id, new_password, admin_username):
     
     password_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt(rounds=12)).decode()
     
-    with get_db() as conn:
+    conn = get_db()
+    try:
+        cur = conn.cursor()
         # Get target user info
-        user_info = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+        cur.execute("SELECT username FROM shared.users WHERE id = %s", (user_id,))
+        user_info = cur.fetchone()
         if not user_info:
             return False, "ユーザーが見つかりません"
         
-        conn.execute("""
-            UPDATE users 
-            SET password_hash = ?, session_version = session_version + 1, updated_at = datetime('now', 'utc')
-            WHERE id = ?
+        cur.execute("""
+            UPDATE shared.users 
+            SET password_hash = %s, session_version = session_version + 1, updated_at = now()
+            WHERE id = %s
         """, (password_hash, user_id))
         target_username = user_info[0]
+        conn.commit()
+    finally:
+        conn.close()
     
     # Log outside the db context to avoid nested lock
     audit_log(admin_username, 'user_password_change', {'target_user': target_username, 'user_id': user_id})
@@ -438,9 +496,12 @@ def update_user_role(user_id, new_role, admin_username):
     if new_role not in ['admin', 'editor', 'viewer']:
         return False, "ロールはadmin、editor、viewerのいずれかを選択してください"
     
-    with get_db() as conn:
+    conn = get_db()
+    try:
+        cur = conn.cursor()
         # Get current user info
-        user_info = conn.execute("SELECT username, role FROM users WHERE id = ?", (user_id,)).fetchone()
+        cur.execute("SELECT username, role FROM shared.users WHERE id = %s", (user_id,))
+        user_info = cur.fetchone()
         if not user_info:
             return False, "ユーザーが見つかりません"
         
@@ -449,15 +510,19 @@ def update_user_role(user_id, new_role, admin_username):
         
         # Prevent admin from removing their own admin role (last admin protection)
         if target_username == admin_username and old_role == 'admin' and new_role != 'admin':
-            admin_count = conn.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'").fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM shared.users WHERE role = 'admin'")
+            admin_count = cur.fetchone()[0]
             if admin_count <= 1:
                 return False, "最後のadminユーザーの権限を変更することはできません"
         
-        conn.execute("""
-            UPDATE users 
-            SET role = ?, session_version = session_version + 1, updated_at = datetime('now', 'utc')
-            WHERE id = ?
+        cur.execute("""
+            UPDATE shared.users 
+            SET role = %s, session_version = session_version + 1, updated_at = now()
+            WHERE id = %s
         """, (new_role, user_id))
+        conn.commit()
+    finally:
+        conn.close()
     
     audit_log(admin_username, 'user_role_change', {
         'target_user': target_username, 
@@ -489,20 +554,26 @@ def update_user_groups(user_id, new_groups, admin_username):
     
     groups_json = json.dumps(groups_list)
     
-    with get_db() as conn:
+    conn = get_db()
+    try:
+        cur = conn.cursor()
         # Get target user info
-        user_info = conn.execute("SELECT username, groups FROM users WHERE id = ?", (user_id,)).fetchone()
+        cur.execute("SELECT username, groups FROM shared.users WHERE id = %s", (user_id,))
+        user_info = cur.fetchone()
         if not user_info:
             return False, "ユーザーが見つかりません"
         
         old_groups = user_info[1]
         
-        conn.execute("""
-            UPDATE users 
-            SET groups = ?, updated_at = datetime('now', 'utc')
-            WHERE id = ?
+        cur.execute("""
+            UPDATE shared.users 
+            SET groups = %s, updated_at = now()
+            WHERE id = %s
         """, (groups_json, user_id))
         target_username = user_info[0]
+        conn.commit()
+    finally:
+        conn.close()
     
     audit_log(admin_username, 'user_groups_change', {
         'target_user': target_username,
@@ -515,9 +586,12 @@ def update_user_groups(user_id, new_groups, admin_username):
 
 def delete_user(user_id, admin_username):
     """Delete user (admin only)"""
-    with get_db() as conn:
+    conn = get_db()
+    try:
+        cur = conn.cursor()
         # Get target user info
-        user_info = conn.execute("SELECT username, role FROM users WHERE id = ?", (user_id,)).fetchone()
+        cur.execute("SELECT username, role FROM shared.users WHERE id = %s", (user_id,))
+        user_info = cur.fetchone()
         if not user_info:
             return False, "ユーザーが見つかりません"
         
@@ -530,11 +604,15 @@ def delete_user(user_id, admin_username):
         
         # Prevent deleting last admin
         if target_role == 'admin':
-            admin_count = conn.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'").fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM shared.users WHERE role = 'admin'")
+            admin_count = cur.fetchone()[0]
             if admin_count <= 1:
                 return False, "最後のadminユーザーを削除することはできません"
         
-        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        cur.execute("DELETE FROM shared.users WHERE id = %s", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
     
     audit_log(admin_username, 'user_delete', {
         'target_user': target_username,
@@ -546,18 +624,19 @@ def delete_user(user_id, admin_username):
 
 def get_audit_logs(limit=50, offset=0, username_filter=None, action_filter=None):
     """Get audit logs with pagination and filters"""
-    with get_db() as conn:
-        conn.row_factory = sqlite3.Row
+    conn = get_db()
+    try:
+        cur = conn.cursor()
         
         where_conditions = []
         params = []
         
         if username_filter:
-            where_conditions.append("username LIKE ?")
+            where_conditions.append("username LIKE %s")
             params.append(f"%{username_filter}%")
         
         if action_filter:
-            where_conditions.append("action = ?")
+            where_conditions.append("action = %s")
             params.append(action_filter)
         
         where_clause = ""
@@ -565,20 +644,22 @@ def get_audit_logs(limit=50, offset=0, username_filter=None, action_filter=None)
             where_clause = "WHERE " + " AND ".join(where_conditions)
         
         # Get total count
-        count_query = f"SELECT COUNT(*) FROM audit_log {where_clause}"
-        total = conn.execute(count_query, params).fetchone()[0]
+        count_query = f"SELECT COUNT(*) FROM shared.audit_log {where_clause}"
+        cur.execute(count_query, params)
+        total = cur.fetchone()[0]
         
         # Get logs
         logs_query = f"""
             SELECT id, username, action, target, detail, ip_address, created_at
-            FROM audit_log {where_clause}
+            FROM shared.audit_log {where_clause}
             ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
+            LIMIT %s OFFSET %s
         """
         params.extend([limit, offset])
         
-        cursor = conn.execute(logs_query, params)
-        logs = [dict(row) for row in cursor.fetchall()]
+        cur.execute(logs_query, params)
+        cols = [desc[0] for desc in cur.description]
+        logs = [dict(zip(cols, row)) for row in cur.fetchall()]
         
         return {
             'logs': logs,
@@ -586,9 +667,15 @@ def get_audit_logs(limit=50, offset=0, username_filter=None, action_filter=None)
             'limit': limit,
             'offset': offset
         }
+    finally:
+        conn.close()
 
 def get_audit_actions():
     """Get distinct action types for filter dropdown"""
-    with get_db() as conn:
-        cursor = conn.execute("SELECT DISTINCT action FROM audit_log ORDER BY action")
-        return [row[0] for row in cursor.fetchall()]
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT action FROM shared.audit_log ORDER BY action")
+        return [row[0] for row in cur.fetchall()]
+    finally:
+        conn.close()

@@ -1,44 +1,41 @@
 #!/usr/bin/env python3
-"""ragMyAdmin — ChromaDB Web Frontend with Permission System"""
+"""ragMyAdmin — pgvector Web Frontend with Permission System"""
 import os
 import sys
 import json
+import secrets
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify, redirect, url_for, session, flash, abort
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session, flash, abort, g
 from flask_session import Session
 from flask_wtf.csrf import CSRFProtect
-import chromadb
+import psycopg2
+import psycopg2.extras
+import urllib.request
 
 # Import authentication module
 from auth import (
     require_auth, require_role, phase1_policy, 
     check_rate_limit, log_login_attempt, verify_password, 
     get_client_ip, get_user_info, LOCKOUT_MINUTES,
-    audit_log, check_chunk_permission, check_collection_permission
+    audit_log, check_chunk_permission, check_collection_permission,
+    # User management functions
+    get_all_users, get_user_by_id, create_user, 
+    update_user_password, update_user_role, update_user_groups, delete_user,
+    get_audit_logs, get_audit_actions
 )
 
-CHROMA_PATH = os.environ.get("CHROMA_PATH", os.path.join(os.path.dirname(__file__), "..", "chroma_db"))
-EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+DB_DSN = os.environ.get("DB_DSN", "dbname=bonsoleil user=teddy")
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/embed")
+EMBEDDING_MODEL = "nomic-embed-text"
 
-# Lazy-loaded embedding function
-_embed_fn = None
+def get_db_conn():
+    return psycopg2.connect(DB_DSN)
 
-def get_embed_fn():
-    global _embed_fn
-    if _embed_fn is None:
-        from fastembed import TextEmbedding
-        class FastEmbedFunction(chromadb.EmbeddingFunction):
-            def __init__(self, model_name):
-                self.model = TextEmbedding(model_name)
-            def __call__(self, input):
-                return [e.tolist() for e in self.model.embed(input)]
-        _embed_fn = FastEmbedFunction(EMBEDDING_MODEL)
-    return _embed_fn
-
-def get_collection(name):
-    """Get collection with embedding function for write operations."""
-    client = get_client()
-    return client.get_collection(name, embedding_function=get_embed_fn())
+def get_embeddings(texts: list) -> list:
+    data = json.dumps({"model": EMBEDDING_MODEL, "input": texts}).encode()
+    req = urllib.request.Request(OLLAMA_URL, data=data, headers={"Content-Type": "application/json"})
+    res = urllib.request.urlopen(req, timeout=30)
+    return json.loads(res.read())["embeddings"]
 
 def meta_title(meta):
     """Extract document title from metadata with fallback."""
@@ -191,10 +188,13 @@ _field_roles_cache = {}
 def get_field_roles(col_name):
     """Get or compute field roles for a collection."""
     if col_name not in _field_roles_cache:
-        client = get_client()
-        col = client.get_collection(col_name)
-        sample = col.get(limit=200, include=["metadatas"])
-        _field_roles_cache[col_name] = detect_field_roles(sample["metadatas"])
+        conn = get_db_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT metadata FROM rag.chunks WHERE collection=%s LIMIT 200", (col_name,))
+        metadatas = [r[0] for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+        _field_roles_cache[col_name] = detect_field_roles(metadatas)
     return _field_roles_cache[col_name]
 
 def smart_title(meta, roles):
@@ -225,17 +225,23 @@ def smart_url(meta, roles):
 app = Flask(__name__)
 
 # Security configuration
-app.secret_key = os.environ.get('SECRET_KEY') or os.urandom(32)
+# Shared secret key with staff portal for SSO
+_staff_key_file = os.path.expanduser('~/.config/staff-auth/secret_key')
+if os.path.exists(_staff_key_file):
+    with open(_staff_key_file) as _f:
+        app.secret_key = _f.read().strip()
+else:
+    app.secret_key = os.environ.get('SECRET_KEY') or os.urandom(32)
 app.config["APPLICATION_ROOT"] = os.environ.get("APP_ROOT", "/")
 
 # Flask-Session configuration
 app.config['SESSION_TYPE'] = 'filesystem'
 app.config['SESSION_FILE_DIR'] = os.path.join(os.path.dirname(__file__), 'sessions')
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SECURE'] = False  # Development - will be True in production with HTTPS
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SECURE_COOKIES', 'true').lower() == 'true'
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 hour
-app.config['SESSION_COOKIE_NAME'] = 'ragmyadmin_session'
+app.config['SESSION_COOKIE_NAME'] = 'staff_session'  # Shared with staff portal for SSO
 
 # CSRF Protection
 app.config['WTF_CSRF_TIME_LIMIT'] = 3600  # 1 hour
@@ -245,10 +251,20 @@ csrf = CSRFProtect(app)
 # Initialize Flask-Session
 Session(app)
 
+# CSP nonce generation
+@app.before_request
+def generate_csp_nonce():
+    g.csp_nonce = secrets.token_hex(16)
+
 # Security headers
 @app.after_request
 def add_security_headers(response):
-    response.headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    nonce = getattr(g, 'csp_nonce', '')
+    response.headers['Content-Security-Policy'] = (
+        f"default-src 'self'; "
+        f"style-src 'self' 'nonce-{nonce}' 'unsafe-inline'; "
+        f"script-src 'self' 'nonce-{nonce}'"
+    )
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     return response
@@ -280,18 +296,18 @@ class PrefixMiddleware:
 BASE = os.environ.get("APP_ROOT", "").rstrip("/")
 
 def get_client():
-    return chromadb.PersistentClient(path=CHROMA_PATH)
+    return get_db_conn()
 
 @app.context_processor
 def inject_base():
     return {
         "BASE": BASE,
+        "csp_nonce": getattr(g, 'csp_nonce', ''),
         "user_info": get_user_info(session.get('username')) if 'username' in session else None
     }
 
 # Authentication routes
 @app.route("/login", methods=["GET", "POST"])
-@csrf.exempt  # Temporarily disable for testing
 def login():
     if request.method == "POST":
         username = request.form.get('username', '').strip()
@@ -342,24 +358,19 @@ def logout():
 @app.route("/")
 @require_auth
 def index():
-    client = get_client()
+    conn = get_db_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM rag.collections ORDER BY name")
+    col_names = [r[0] for r in cur.fetchall()]
     collections = []
-    for col in client.list_collections():
-        count = col.count()
-        # Count unique documents (by key or __key metadata)
-        doc_count = 0
-        if count > 0:
-            try:
-                all_meta = col.get(include=["metadatas"])["metadatas"]
-                keys = set()
-                for m in all_meta:
-                    k = (m or {}).get("key") or (m or {}).get("__key") or ""
-                    if k:
-                        keys.add(k)
-                doc_count = len(keys) if keys else count
-            except Exception:
-                doc_count = count
-        collections.append({"name": col.name, "count": count, "doc_count": doc_count})
+    for col_name in col_names:
+        cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE collection = %s", (col_name,))
+        count = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(DISTINCT doc_key) FROM rag.chunks WHERE collection = %s", (col_name,))
+        doc_count = cur.fetchone()[0]
+        collections.append({"name": col_name, "count": count, "doc_count": doc_count})
+    cur.close()
+    conn.close()
     return render_template("index.html", collections=collections)
 
 @app.route("/collection/<name>")
@@ -376,26 +387,40 @@ def collection_view(name):
     if not check_collection_permission(name, username, user_role, required='r'):
         abort(404)  # Hide resource existence
     
-    client = get_client()
-    col = client.get_collection(name)
-    all_data = col.get(include=["documents", "metadatas"])
-    
+    conn = get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, doc_key, content, title, url, date, chunk_index, metadata
+        FROM rag.chunks WHERE collection = %s ORDER BY doc_key, chunk_index
+    """, (name,))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    # Convert rows to all_data format
+    all_data = {
+        "ids": [r[0] for r in rows],
+        "documents": [r[2] for r in rows],
+        "metadatas": [r[7] if r[7] else {} for r in rows],
+        # doc_key is directly available
+        "_doc_keys": [r[1] for r in rows],
+    }
+
     roles = get_field_roles(name)
     
-    # Group by document key (ID before _c), filtering by permissions
+    # Group by document key, filtering by permissions
     articles = {}
     total_filtered_chunks = 0
     
-    for i, doc_id in enumerate(all_data["ids"]):
-        meta = all_data["metadatas"][i] if all_data["metadatas"] else {}
+    for i, chunk_id in enumerate(all_data["ids"]):
+        meta = all_data["metadatas"][i] or {}
         
         # Check chunk-level permission
         if not check_chunk_permission(meta, username, user_role, user_groups, required='r'):
             continue
         
         total_filtered_chunks += 1
-        parts = doc_id.rsplit("_c", 1)
-        art_key = parts[0] if len(parts) == 2 else doc_id
+        art_key = all_data["_doc_keys"][i]
         
         if art_key not in articles:
             date_field = roles.get("date") or "date"
@@ -409,13 +434,14 @@ def collection_view(name):
                 "owner": meta.get('__owner', ''),
             }
         doc_len = len(all_data["documents"][i]) if all_data["documents"][i] else 0
-        articles[art_key]["chunks"].append(doc_id)
+        articles[art_key]["chunks"].append(chunk_id)
         articles[art_key]["total_chars"] += doc_len
     
     sorted_articles = sorted(articles.values(), key=lambda a: a.get("published_at", ""), reverse=True)
     
+    can_write = check_collection_permission(name, username, user_role, required='w')
     return render_template("documents.html", current_collection=name, current_view="documents",
-        name=name, documents=sorted_articles, total=len(sorted_articles), chunk_total=total_filtered_chunks)
+        name=name, documents=sorted_articles, total=len(sorted_articles), chunk_total=total_filtered_chunks, can_write=can_write)
 
 @app.route("/collection/<name>/document/<doc_key>")
 @require_auth
@@ -431,46 +457,50 @@ def document_chunks_view(name, doc_key):
     if not check_collection_permission(name, username, user_role, required='r'):
         abort(404)  # Hide resource existence
     
-    client = get_client()
-    col = client.get_collection(name)
-    all_result = col.get(include=["documents", "metadatas"])
-    
+    conn = get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, doc_key, content, title, url, date, chunk_index, metadata
+        FROM rag.chunks WHERE collection = %s AND doc_key = %s ORDER BY chunk_index
+    """, (name, doc_key))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
     roles = get_field_roles(name)
     
-    # Filter chunks belonging to this document with permission checks
     chunks = []
     doc_title = doc_key
-    for i, doc_id in enumerate(all_result["ids"]):
-        parts = doc_id.rsplit("_c", 1)
-        art_key = parts[0] if len(parts) == 2 else doc_id
-        if art_key == doc_key:
-            meta = all_result["metadatas"][i] if all_result["metadatas"] else {}
-            
-            # Check chunk-level permission
-            if not check_chunk_permission(meta, username, user_role, user_groups, required='r'):
-                continue
-            
-            if not chunks:
-                doc_title = smart_title(meta, roles) or doc_key
-            chunks.append({
-                "id": doc_id,
-                "document": all_result["documents"][i][:200] if all_result["documents"][i] else "",
-                "full_document": all_result["documents"][i] or "",
-                "metadata": meta,
-                "title": smart_title(meta, roles),
-                "url": smart_url(meta, roles),
-                "chunk_index": parts[1] if len(parts) == 2 else "",
-            })
+    for r in rows:
+        chunk_id, row_doc_key, content, title, url, date, chunk_index, meta = r
+        meta = meta or {}
+        
+        # Check chunk-level permission
+        if not check_chunk_permission(meta, username, user_role, user_groups, required='r'):
+            continue
+        
+        if not chunks:
+            doc_title = smart_title(meta, roles) or doc_key
+        chunks.append({
+            "id": chunk_id,
+            "document": content[:200] if content else "",
+            "full_document": content or "",
+            "metadata": meta,
+            "title": smart_title(meta, roles),
+            "url": smart_url(meta, roles),
+            "chunk_index": chunk_index,
+        })
     
     # If no accessible chunks found, return 404 
     if not chunks:
         abort(404)
     
     # Sort by chunk index
-    chunks.sort(key=lambda c: c.get("chunk_index", ""))
+    chunks.sort(key=lambda c: c.get("chunk_index") or 0)
     
+    can_write = check_collection_permission(name, username, user_role, required='w')
     return render_template("collection.html", current_collection=name, current_view="doc_chunks",
-        name=name, doc_key=doc_key, doc_title=doc_title, chunks=chunks, total=len(chunks))
+        name=name, doc_key=doc_key, doc_title=doc_title, chunks=chunks, total=len(chunks), can_write=can_write)
 
 @app.route("/collection/<name>/chunk/<chunk_id>")
 @require_auth
@@ -485,25 +515,43 @@ def chunk_detail(name, chunk_id):
     if not check_collection_permission(name, username, user_role, required='r'):
         abort(404)  # Hide resource existence
     
-    client = get_client()
-    col = client.get_collection(name)
-    result = col.get(ids=[chunk_id], include=["documents", "metadatas", "embeddings"])
-    
-    if not result["ids"]:
+    conn = get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, content, metadata, embedding
+        FROM rag.chunks WHERE id = %s AND collection = %s
+    """, (chunk_id, name))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not row:
         abort(404)
     
-    chunk_meta = result["metadatas"][0] if result["metadatas"] else {}
+    row_id, content, chunk_meta, embedding = row
+    chunk_meta = chunk_meta or {}
     
     # Check chunk-level permission
     if not check_chunk_permission(chunk_meta, username, user_role, user_groups, required='r'):
         abort(404)  # Hide resource existence
     
+    # Parse embedding if it's a string
+    emb_list = []
+    if embedding:
+        if isinstance(embedding, str):
+            try:
+                emb_list = json.loads(embedding)
+            except Exception:
+                emb_list = []
+        elif isinstance(embedding, list):
+            emb_list = embedding
+
     chunk = {
-        "id": result["ids"][0],
-        "document": result["documents"][0],
+        "id": row_id,
+        "document": content,
         "metadata": chunk_meta,
-        "embedding_dim": len(result["embeddings"][0]) if result["embeddings"] is not None and len(result["embeddings"]) > 0 else 0,
-        "embedding_preview": list(result["embeddings"][0][:10]) if result["embeddings"] is not None and len(result["embeddings"]) > 0 else [],
+        "embedding_dim": len(emb_list),
+        "embedding_preview": emb_list[:10],
     }
     
     # Check if user has write permission for editing/deleting
@@ -523,38 +571,61 @@ def documents_view(name):
     """Legacy URL — redirect to collection view which now shows documents."""
     return redirect(url_for("collection_view", name=name))
 
-@app.route("/collection/<name>/document/<doc_key>/edit")
+@app.route("/collection/<name>/document/<doc_key>/edit", methods=["GET"])
 @require_auth
 def document_edit(name, doc_key):
-    client = get_client()
-    col = client.get_collection(name)
-    roles = get_field_roles(name)
+    # Permission check: require write access
+    username = session['username']
+    user_info = get_user_info(username)
+    user_role = user_info['role']
+    user_groups = user_info['groups']
     
-    # Get all chunks for this document
-    all_data = col.get(include=["documents", "metadatas"])
+    if not check_collection_permission(name, username, user_role, required='w'):
+        abort(403)
+    
+    roles = get_field_roles(name)
+
+    conn = get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, content, metadata, chunk_index
+        FROM rag.chunks WHERE collection = %s AND doc_key = %s ORDER BY chunk_index
+    """, (name, doc_key))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
     chunks = []
     meta_base = {}
-    for i, doc_id in enumerate(all_data["ids"]):
-        if doc_id.startswith(doc_key + "_c"):
-            chunks.append({
-                "id": doc_id,
-                "document": all_data["documents"][i],
-                "metadata": all_data["metadatas"][i] if all_data["metadatas"] else {},
-            })
-            if not meta_base and all_data["metadatas"] and all_data["metadatas"][i]:
-                meta_base = {k: v for k, v in all_data["metadatas"][i].items()
-                            if k != "index"}
+    for row in rows:
+        chunk_id, content, meta, chunk_index = row
+        meta = meta or {}
+        # Check chunk-level write permission
+        if not check_chunk_permission(meta, username, user_role, user_groups, required='w'):
+            abort(403)
+        chunks.append({
+            "id": chunk_id,
+            "document": content,
+            "metadata": meta,
+        })
+        if not meta_base and meta:
+            meta_base = {k: v for k, v in meta.items() if k != "index"}
+    
+    if not chunks:
+        abort(404)
     
     chunks.sort(key=lambda c: c["id"])
     
-    # Merge chunks: strip first line (title prefix) + remove overlap
+    # Merge chunks: strip __chunk_prefix line + remove overlap
     full_text = ""
+    prefix_spec = meta_base.get("__chunk_prefix", "")
     for i, c in enumerate(chunks):
         doc = c["document"]
-        # First line is always the 【title】 prefix — strip it
-        first_nl = doc.find("\n")
-        if first_nl > 0:
-            doc = doc[first_nl + 1:]
+        # Strip chunk prefix (first line like 【...】)
+        if doc.startswith("【"):
+            first_nl = doc.find("\n")
+            if first_nl > 0:
+                doc = doc[first_nl + 1:]
         # Find overlap: try matching the end of full_text with start of doc
         best = 0
         max_check = min(len(full_text), len(doc), 200)
@@ -564,12 +635,15 @@ def document_edit(name, doc_key):
         if best > 0:
             full_text += doc[best:]
         else:
-            full_text += "\n" + doc
+            if full_text:
+                full_text += "\n" + doc
+            else:
+                full_text = doc
     title = smart_title(meta_base, roles) or doc_key
     
     return render_template("document_edit.html", current_collection=name, current_view="document_edit",
         name=name, doc_key=doc_key, title=title,
-        chunks=chunks, full_text=full_text, meta_base=meta_base)
+        chunks=chunks, full_text=full_text.strip(), meta_base=meta_base)
 
 # API routes with authentication
 @app.route("/api/collections")
@@ -577,23 +651,19 @@ def document_edit(name, doc_key):
 @require_auth
 def api_collections():
     """Return list of collections with counts."""
-    client = get_client()
+    conn = get_db_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM rag.collections ORDER BY name")
+    col_names = [r[0] for r in cur.fetchall()]
     result = []
-    for c in client.list_collections():
-        count = c.count()
-        doc_count = 0
-        if count > 0:
-            try:
-                all_meta = c.get(include=["metadatas"])["metadatas"]
-                keys = set()
-                for m in all_meta:
-                    k = (m or {}).get("key") or (m or {}).get("__key") or ""
-                    if k:
-                        keys.add(k)
-                doc_count = len(keys) if keys else count
-            except Exception:
-                doc_count = count
-        result.append({"name": c.name, "count": count, "doc_count": doc_count})
+    for col_name in col_names:
+        cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE collection = %s", (col_name,))
+        count = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(DISTINCT doc_key) FROM rag.chunks WHERE collection = %s", (col_name,))
+        doc_count = cur.fetchone()[0]
+        result.append({"name": col_name, "count": count, "doc_count": doc_count})
+    cur.close()
+    conn.close()
     return jsonify(result)
 
 @app.route("/api/roles/<name>")
@@ -622,29 +692,35 @@ def api_search():
     if not check_collection_permission(col_name, username, user_role, required='r'):
         return jsonify({"results": [], "query": query, "collection": col_name, "error": "No access to collection"})
     
-    client = get_client()
-    col = client.get_collection(col_name)
-    
-    # Get more results initially to account for filtering
-    search_limit = min(n_results * 3, 100)  # Request extra to account for filtering
-    
-    results = col.query(
-        query_texts=[query],
-        n_results=search_limit,
-        include=["documents", "metadatas", "distances"]
-    )
+    # Get embedding for query
+    emb = get_embeddings([query])[0]
+
+    conn = get_db_conn()
+    cur = conn.cursor()
+    # Get extra results to account for permission filtering
+    search_limit = min(n_results * 3, 100)
+    cur.execute("""
+        SELECT id, content, metadata, 1-(embedding <=> %s::vector) AS score
+        FROM rag.chunks WHERE collection = %s
+        AND (metadata->>'__visibility' IS NULL OR metadata->>'__visibility' != 'private')
+        ORDER BY embedding <=> %s::vector LIMIT %s
+    """, (json.dumps(emb), col_name, json.dumps(emb), search_limit))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
     
     items = []
-    for i, doc_id in enumerate(results["ids"][0]):
-        metadata = results["metadatas"][0][i] if results["metadatas"] else {}
+    for row in rows:
+        chunk_id, content, metadata, score = row
+        metadata = metadata or {}
         
         # Check chunk-level permission
         if check_chunk_permission(metadata, username, user_role, user_groups, required='r'):
             items.append({
-                "id": doc_id,
-                "document": results["documents"][0][i],
+                "id": chunk_id,
+                "document": content,
                 "metadata": metadata,
-                "distance": round(results["distances"][0][i], 4) if results["distances"] else None,
+                "distance": round(1 - score, 4) if score is not None else None,
             })
             
             # Stop when we have enough results
@@ -657,248 +733,286 @@ def api_search():
 @csrf.exempt
 @require_auth
 def api_update_chunk():
-    data = request.json
-    col_name = data.get("collection")
-    chunk_id = data.get("id")
-    new_text = data.get("document")
-    new_metadata = data.get("metadata")
-    
-    if not col_name or not chunk_id or new_text is None:
-        return jsonify({"error": "collection, id, and document required"}), 400
-    
-    # Get user info for permission checks
-    username = session['username']
-    user_info = get_user_info(username)
-    user_role = user_info['role']
-    user_groups = user_info['groups']
-    
-    # Check collection permission
-    if not check_collection_permission(col_name, username, user_role, required='w'):
-        abort(404)  # Hide resource existence
-    
-    col = get_collection(col_name)
-    
-    # Get current chunk metadata for permission check
     try:
-        existing_chunk = col.get(ids=[chunk_id], include=['metadatas'])
-        if not existing_chunk['ids']:
+        data = request.json
+        col_name = data.get("collection")
+        chunk_id = data.get("id")
+        new_text = data.get("document")
+        new_metadata = data.get("metadata")
+        
+        if not col_name or not chunk_id or new_text is None:
+            return jsonify({"error": "collection, id, and document required"}), 400
+        
+        # Get user info for permission checks
+        username = session['username']
+        user_info = get_user_info(username)
+        user_role = user_info['role']
+        user_groups = user_info['groups']
+        
+        # Check collection permission
+        if not check_collection_permission(col_name, username, user_role, required='w'):
+            abort(404)  # Hide resource existence
+        
+        conn = get_db_conn()
+        cur = conn.cursor()
+
+        # Get current chunk metadata for permission check
+        cur.execute("SELECT metadata FROM rag.chunks WHERE id = %s AND collection = %s", (chunk_id, col_name))
+        existing = cur.fetchone()
+        if not existing:
+            cur.close()
+            conn.close()
             abort(404)
         
-        chunk_meta = existing_chunk['metadatas'][0] or {}
-    except:
-        abort(404)
-    
-    # Check chunk-level permission
-    if not check_chunk_permission(chunk_meta, username, user_role, user_groups, required='w'):
-        abort(404)  # Hide resource existence
-    
-    # Update chunk metadata to include editor info
-    if new_metadata:
-        if '__owner' not in new_metadata and '__owner' not in chunk_meta:
-            new_metadata['__owner'] = username
-        new_metadata['__modified_by'] = username
-        new_metadata['__modified_at'] = datetime.now().isoformat()
-    else:
-        new_metadata = chunk_meta.copy()
-        new_metadata['__modified_by'] = username
-        new_metadata['__modified_at'] = datetime.now().isoformat()
-    
-    update_kwargs = {"ids": [chunk_id], "documents": [new_text]}
-    if new_metadata:
-        update_kwargs["metadatas"] = [new_metadata]
-    
-    col.update(**update_kwargs)
-    
-    # Audit log
-    audit_log(username, 'edit', f'Updated chunk {chunk_id} in {col_name}', chunk_id)
-    
-    # Clear field roles cache
-    _field_roles_cache.pop(col_name, None)
-    
-    return jsonify({"updated": chunk_id, "new_length": len(new_text)})
+        chunk_meta = existing[0] or {}
+        
+        # Check chunk-level permission
+        if not check_chunk_permission(chunk_meta, username, user_role, user_groups, required='w'):
+            cur.close()
+            conn.close()
+            abort(404)  # Hide resource existence
+        
+        # Update chunk metadata to include editor info
+        if new_metadata:
+            if '__owner' not in new_metadata and '__owner' not in chunk_meta:
+                new_metadata['__owner'] = username
+            new_metadata['__modified_by'] = username
+            new_metadata['__modified_at'] = datetime.now().isoformat()
+        else:
+            new_metadata = chunk_meta.copy()
+            new_metadata['__modified_by'] = username
+            new_metadata['__modified_at'] = datetime.now().isoformat()
+        
+        # Re-embed
+        emb = get_embeddings([new_text])[0]
+        cur.execute("""
+            UPDATE rag.chunks SET content=%s, embedding=%s::vector, metadata=%s::jsonb, updated_at=now()
+            WHERE id=%s AND collection=%s
+        """, (new_text, json.dumps(emb), json.dumps(new_metadata), chunk_id, col_name))
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        # Audit log
+        audit_log(username, 'edit', {'action': 'update_chunk', 'collection': col_name, 'chunk_id': chunk_id}, target=chunk_id)
+        
+        # Clear field roles cache
+        _field_roles_cache.pop(col_name, None)
+        
+        return jsonify({"updated": chunk_id, "new_length": len(new_text)})
+        
+    except Exception as e:
+        app.logger.error(f"api_update_chunk error for user {session.get('username')}: {str(e)}")
+        return jsonify({"error": "チャンクの更新中にエラーが発生しました"}), 500
 
 @app.route("/api/rechunk", methods=["POST"])
 @csrf.exempt
 @require_auth
 def api_rechunk():
     """Re-chunk a document: delete all chunks, re-split, re-embed."""
-    data = request.json
-    col_name = data.get("collection")
-    doc_key = data.get("document_key")
-    full_text = data.get("text")
-    metadata_base = data.get("metadata", {})
-    chunk_size = int(data.get("chunk_size", 600))
-    chunk_overlap = int(data.get("overlap", 100))
-    
-    if not col_name or not doc_key or not full_text:
-        return jsonify({"error": "collection, document_key, and text required"}), 400
-    
-    # Get user info for permission checks
-    username = session['username']
-    user_info = get_user_info(username)
-    user_role = user_info['role']
-    user_groups = user_info['groups']
-    
-    # Check collection permission - rechunking requires admin/editor
-    if not check_collection_permission(col_name, username, user_role, required='w'):
-        abort(404)  # Hide resource existence
-    
-    col = get_collection(col_name)
-    
-    # 1. Check permissions for existing chunks before deletion
-    all_ids = col.get()["ids"]
-    old_ids = [i for i in all_ids if i.startswith(doc_key + "_c")]
-    
-    # Check if user has permission to delete existing chunks
-    allowed_to_rechunk = True
-    if old_ids:
-        for chunk_id in old_ids:
-            try:
-                existing_chunk = col.get(ids=[chunk_id], include=['metadatas'])
-                if existing_chunk['ids']:
-                    chunk_meta = existing_chunk['metadatas'][0] or {}
-                    if not check_chunk_permission(chunk_meta, username, user_role, user_groups, required='w'):
-                        allowed_to_rechunk = False
-                        break
-            except:
-                # If we can't access the chunk, assume no permission
+    try:
+        data = request.json
+        col_name = data.get("collection")
+        doc_key = data.get("document_key")
+        full_text = data.get("text")
+        metadata_base = data.get("metadata", {})
+        chunk_size = int(data.get("chunk_size", 600))
+        chunk_overlap = int(data.get("overlap", 100))
+        
+        if not col_name or not doc_key or not full_text:
+            return jsonify({"error": "collection, document_key, and text required"}), 400
+        
+        # Get user info for permission checks
+        username = session['username']
+        user_info = get_user_info(username)
+        user_role = user_info['role']
+        user_groups = user_info['groups']
+        
+        # Check collection permission - rechunking requires admin/editor
+        if not check_collection_permission(col_name, username, user_role, required='w'):
+            abort(404)  # Hide resource existence
+        
+        conn = get_db_conn()
+        cur = conn.cursor()
+
+        # 1. Get existing chunks and check permissions
+        cur.execute("SELECT id, metadata FROM rag.chunks WHERE collection = %s AND doc_key = %s", (col_name, doc_key))
+        existing_rows = cur.fetchall()
+        old_ids = [r[0] for r in existing_rows]
+
+        allowed_to_rechunk = True
+        for row_id, chunk_meta in existing_rows:
+            chunk_meta = chunk_meta or {}
+            if not check_chunk_permission(chunk_meta, username, user_role, user_groups, required='w'):
                 allowed_to_rechunk = False
                 break
-    
-    if not allowed_to_rechunk:
-        abort(404)  # User doesn't have permission to rechunk this document
-    
-    # Delete existing chunks
-    if old_ids:
-        col.delete(ids=old_ids)
-    
-    # 2. Simple chunking with overlap
-    chunks = []
-    text = full_text.strip()
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end]
-        if chunk.strip():
-            chunks.append(chunk)
-        start = end - chunk_overlap
-        if start >= len(text):
-            break
-    
-    # 3. Apply __chunk_prefix to each chunk
-    prefix_spec = metadata_base.get("__chunk_prefix", "")
-    if prefix_spec:
-        parts = [metadata_base.get(k.strip(), "") for k in prefix_spec.split(",")]
-        prefix_line = " | ".join(str(p) for p in parts if p)
-        if prefix_line:
-            chunks = [f"【{prefix_line}】\n{c}" for c in chunks]
-    
-    # 4. Add ownership metadata to new chunks
-    for i in range(len(chunks)):
-        meta = dict(metadata_base)
-        meta["index"] = i
-        if '__owner' not in meta:
-            meta['__owner'] = username
-        meta['__created_by'] = username
-        meta['__created_at'] = datetime.now().isoformat()
-        metadata_base = meta
-        break
-    
-    # Create metadata for each chunk
-    new_ids = [f"{doc_key}_c{i:03d}" for i in range(len(chunks))]
-    new_metas = []
-    for i in range(len(chunks)):
-        m = dict(metadata_base)
-        m["index"] = i
-        new_metas.append(m)
-    
-    col.add(ids=new_ids, documents=chunks, metadatas=new_metas)
-    
-    # Audit log
-    audit_log(username, 'rechunk', f'Re-chunked document {doc_key} in {col_name}: {len(old_ids)} -> {len(chunks)} chunks')
-    
-    _field_roles_cache.pop(col_name, None)
-    
-    return jsonify({
-        "document_key": doc_key,
-        "old_chunks": len(old_ids),
-        "new_chunks": len(chunks),
-    })
+        
+        if not allowed_to_rechunk:
+            cur.close()
+            conn.close()
+            abort(404)  # User doesn't have permission to rechunk this document
+        
+        # Delete existing chunks
+        if old_ids:
+            cur.execute("DELETE FROM rag.chunks WHERE id = ANY(%s) AND collection = %s", (old_ids, col_name))
+        
+        # 2. Paragraph-aware chunking
+        chunks = []
+        text = full_text.strip()
+        paragraphs = text.split("\n")
+        current_chunk = ""
+        for para in paragraphs:
+            candidate = (current_chunk + "\n" + para).strip() if current_chunk else para.strip()
+            if len(candidate) > chunk_size and current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = para.strip()
+            else:
+                current_chunk = candidate
+            # Hard split if single paragraph exceeds chunk_size
+            while len(current_chunk) > chunk_size:
+                chunks.append(current_chunk[:chunk_size])
+                current_chunk = current_chunk[chunk_size - chunk_overlap:] if chunk_overlap else current_chunk[chunk_size:]
+        if current_chunk.strip():
+            chunks.append(current_chunk)
+        
+        # 3. Apply __chunk_prefix to each chunk
+        prefix_spec = metadata_base.get("__chunk_prefix", "")
+        if prefix_spec:
+            parts = [metadata_base.get(k.strip(), "") for k in prefix_spec.split(",")]
+            prefix_line = " | ".join(str(p) for p in parts if p)
+            if prefix_line:
+                chunks = [f"【{prefix_line}】\n{c}" for c in chunks]
+        
+        # 4. Build metadata for each chunk, add ownership
+        new_metas = []
+        for i in range(len(chunks)):
+            m = dict(metadata_base)
+            m["index"] = i
+            if '__owner' not in m:
+                m['__owner'] = username
+            m['__created_by'] = username
+            m['__created_at'] = datetime.now().isoformat()
+            new_metas.append(m)
+        
+        # 5. Re-embed all chunks
+        embeddings = get_embeddings(chunks)
+
+        # 6. Insert new chunks
+        for i, (chunk_text, emb, meta) in enumerate(zip(chunks, embeddings, new_metas)):
+            new_id = f"{doc_key}_c{i:03d}"
+            cur.execute("""
+                INSERT INTO rag.chunks (id, collection, doc_key, content, embedding, metadata, chunk_index, total)
+                VALUES (%s, %s, %s, %s, %s::vector, %s::jsonb, %s, %s)
+            """, (new_id, col_name, doc_key, chunk_text, json.dumps(emb), json.dumps(meta), i, len(chunks)))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        # Audit log
+        audit_log(username, 'rechunk', {'action': 'rechunk_document', 'collection': col_name, 'document_key': doc_key, 'old_chunks': len(old_ids), 'new_chunks': len(chunks)}, target=doc_key)
+        
+        _field_roles_cache.pop(col_name, None)
+        
+        return jsonify({
+            "document_key": doc_key,
+            "old_chunks": len(old_ids),
+            "new_chunks": len(chunks),
+        })
+        
+    except Exception as e:
+        app.logger.error(f"api_rechunk error for user {session.get('username')}: {str(e)}")
+        return jsonify({"error": "ドキュメントの再チャンク中にエラーが発生しました"}), 500
 
 @app.route("/api/delete", methods=["POST"])
 @csrf.exempt
 @require_auth
 def api_delete():
-    data = request.json
-    col_name = data.get("collection")
-    chunk_ids = data.get("ids", [])
-    
-    if not col_name or not chunk_ids:
-        return jsonify({"error": "collection and ids required"}), 400
-    
-    # Get user info for permission checks
-    username = session['username']
-    user_info = get_user_info(username)
-    user_role = user_info['role']
-    user_groups = user_info['groups']
-    
-    # Check collection permission
-    if not check_collection_permission(col_name, username, user_role, required='w'):
-        abort(404)  # Hide resource existence
-    
-    client = get_client()
-    col = client.get_collection(col_name)
-    
-    # Check permission for each chunk before deleting
-    allowed_ids = []
-    for chunk_id in chunk_ids:
-        try:
-            existing_chunk = col.get(ids=[chunk_id], include=['metadatas'])
-            if existing_chunk['ids']:
-                chunk_meta = existing_chunk['metadatas'][0] or {}
+    try:
+        data = request.json
+        col_name = data.get("collection")
+        chunk_ids = data.get("ids", [])
+        
+        if not col_name or not chunk_ids:
+            return jsonify({"error": "collection and ids required"}), 400
+        
+        # Get user info for permission checks
+        username = session['username']
+        user_info = get_user_info(username)
+        user_role = user_info['role']
+        user_groups = user_info['groups']
+        
+        # Check collection permission
+        if not check_collection_permission(col_name, username, user_role, required='w'):
+            abort(404)  # Hide resource existence
+        
+        conn = get_db_conn()
+        cur = conn.cursor()
+
+        # Check permission for each chunk before deleting
+        allowed_ids = []
+        for chunk_id in chunk_ids:
+            cur.execute("SELECT metadata FROM rag.chunks WHERE id = %s AND collection = %s", (chunk_id, col_name))
+            row = cur.fetchone()
+            if row:
+                chunk_meta = row[0] or {}
                 if check_chunk_permission(chunk_meta, username, user_role, user_groups, required='w'):
                     allowed_ids.append(chunk_id)
-        except:
-            # Ignore chunks that don't exist or can't be accessed
-            continue
-    
-    if not allowed_ids:
-        abort(404)  # No chunks found or no permission
-    
-    # Delete only allowed chunks
-    col.delete(ids=allowed_ids)
-    
-    # Audit log for each deleted chunk
-    for chunk_id in allowed_ids:
-        audit_log(username, 'delete', f'Deleted chunk {chunk_id} from {col_name}', chunk_id)
-    
-    return jsonify({"deleted": len(allowed_ids), "remaining": col.count()})
+        
+        if not allowed_ids:
+            cur.close()
+            conn.close()
+            abort(404)  # No chunks found or no permission
+        
+        # Delete only allowed chunks
+        cur.execute("DELETE FROM rag.chunks WHERE id = ANY(%s) AND collection = %s", (allowed_ids, col_name))
+        
+        # Get remaining count
+        cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE collection = %s", (col_name,))
+        remaining = cur.fetchone()[0]
+
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        # Audit log for each deleted chunk
+        for chunk_id in allowed_ids:
+            audit_log(username, 'delete', {'action': 'delete_chunk', 'collection': col_name, 'chunk_id': chunk_id}, target=chunk_id)
+        
+        return jsonify({"deleted": len(allowed_ids), "remaining": remaining})
+        
+    except Exception as e:
+        app.logger.error(f"api_delete error for user {session.get('username')}: {str(e)}")
+        return jsonify({"error": "チャンクの削除中にエラーが発生しました"}), 500
 
 @app.route("/api/stats/<name>")
 @require_auth
 def api_stats(name):
-    client = get_client()
-    col = client.get_collection(name)
-    count = col.count()
+    conn = get_db_conn()
+    cur = conn.cursor()
     
-    # Get sample metadata to understand structure
-    sample = col.get(limit=5, include=["metadatas"])
-    meta_keys = set()
-    for m in (sample["metadatas"] or []):
-        if m:
-            meta_keys.update(m.keys())
+    cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE collection=%s", (name,))
+    count = cur.fetchone()[0]
+    
+    # Get metadata keys
+    cur.execute("SELECT DISTINCT jsonb_object_keys(metadata) FROM rag.chunks WHERE collection=%s LIMIT 200", (name,))
+    meta_keys = sorted(set(r[0] for r in cur.fetchall()))
     
     # Get source distribution and doc length stats
-    all_data = col.get(include=["metadatas", "documents"])
+    cur.execute("SELECT content, metadata FROM rag.chunks WHERE collection=%s", (name,))
+    all_rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
     sources = {}
     doc_lengths = []
     roles = get_field_roles(name)
-    for i, m in enumerate(all_data["metadatas"] or []):
+    for content, m in all_rows:
         if m:
             src = smart_title(m, roles) or "unknown"
             sources[src] = sources.get(src, 0) + 1
-        if all_data["documents"] and all_data["documents"][i]:
-            doc_lengths.append(len(all_data["documents"][i]))
+        if content:
+            doc_lengths.append(len(content))
     
     len_stats = {}
     if doc_lengths:
@@ -914,10 +1028,209 @@ def api_stats(name):
     return jsonify({
         "name": name,
         "count": count,
-        "metadata_keys": sorted(meta_keys),
+        "metadata_keys": meta_keys,
         "sources": dict(sorted(sources.items(), key=lambda x: -x[1])[:30]),
         "doc_lengths": len_stats,
     })
+
+# User management routes (admin only)
+
+@app.route("/users")
+@require_auth
+@require_role('admin')
+def users_list():
+    """Users management page (admin only)"""
+    users = get_all_users()
+    current_user = session.get('username')
+    
+    # Parse groups JSON for display
+    for user in users:
+        try:
+            user['groups_list'] = json.loads(user['groups'])
+        except (json.JSONDecodeError, TypeError):
+            user['groups_list'] = []
+    
+    return render_template('users.html', 
+                         users=users, 
+                         current_user=current_user)
+
+@app.route("/users/add", methods=["GET", "POST"])
+@require_auth  
+@require_role('admin')
+def users_add():
+    """Add new user (admin only)"""
+    if request.method == "GET":
+        return render_template('user_add.html')
+    
+    # POST - create user
+    username = request.form.get('username', '').strip()
+    password = request.form.get('password', '')
+    password_confirm = request.form.get('password_confirm', '')
+    role = request.form.get('role', 'viewer')
+    groups = request.form.get('groups', '').strip()
+    
+    # Server-side validation
+    errors = []
+    
+    if not username:
+        errors.append("ユーザー名は必須です")
+    
+    if not password:
+        errors.append("パスワードは必須です")
+    elif password != password_confirm:
+        errors.append("パスワードが一致しません")
+    
+    if errors:
+        return render_template('user_add.html', 
+                             errors=errors,
+                             username=username,
+                             role=role,
+                             groups=groups), 400
+    
+    # Create user
+    try:
+        success, message = create_user(username, password, role, groups)
+    except Exception as e:
+        app.logger.error(f"create_user error: {e}")
+        success, message = False, f"ユーザー作成中にエラーが発生しました: {e}"
+    
+    if success:
+        try:
+            audit_log(session['username'], 'admin_user_add', {'target_user': username})
+        except Exception:
+            pass
+        flash(message, 'success')
+        return redirect(url_for('users_list'))
+    else:
+        return render_template('user_add.html', 
+                             errors=[message],
+                             username=username,
+                             role=role,
+                             groups=groups), 400
+
+@app.route("/audit")
+@require_auth
+@require_role('admin')
+def audit_logs():
+    """Audit logs viewer (admin only)"""
+    # Pagination
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    per_page = min(per_page, 200)  # Limit max per_page
+    offset = (page - 1) * per_page
+    
+    # Filters
+    username_filter = request.args.get('username', '').strip()
+    action_filter = request.args.get('action', '').strip()
+    
+    if username_filter == '':
+        username_filter = None
+    if action_filter == '':
+        action_filter = None
+    
+    # Get logs
+    result = get_audit_logs(
+        limit=per_page, 
+        offset=offset,
+        username_filter=username_filter,
+        action_filter=action_filter
+    )
+    
+    # Pagination info
+    total_pages = (result['total'] + per_page - 1) // per_page
+    has_prev = page > 1
+    has_next = page < total_pages
+    
+    # Parse detail JSON for display
+    for log in result['logs']:
+        if log['detail']:
+            try:
+                log['detail_parsed'] = json.loads(log['detail'])
+            except json.JSONDecodeError:
+                log['detail_parsed'] = {'raw': log['detail']}
+        else:
+            log['detail_parsed'] = {}
+    
+    # Get available actions for filter
+    available_actions = get_audit_actions()
+    
+    return render_template('audit.html',
+                         logs=result['logs'],
+                         total=result['total'],
+                         page=page,
+                         per_page=per_page,
+                         total_pages=total_pages,
+                         has_prev=has_prev,
+                         has_next=has_next,
+                         username_filter=username_filter or '',
+                         action_filter=action_filter or '',
+                         available_actions=available_actions)
+
+# User management API endpoints
+
+@app.route("/api/user/<int:user_id>/password", methods=["POST"])
+@csrf.exempt
+@require_auth
+@require_role('admin')
+def api_update_user_password(user_id):
+    """Update user password"""
+    new_password = request.json.get('password', '').strip()
+    
+    if not new_password:
+        return jsonify({"success": False, "message": "パスワードは必須です"}), 400
+    
+    success, message = update_user_password(user_id, new_password, session['username'])
+    
+    if success:
+        return jsonify({"success": True, "message": message})
+    else:
+        return jsonify({"success": False, "message": message}), 400
+
+@app.route("/api/user/<int:user_id>/role", methods=["POST"])
+@csrf.exempt
+@require_auth
+@require_role('admin')
+def api_update_user_role(user_id):
+    """Update user role"""
+    new_role = request.json.get('role', '').strip()
+    
+    if not new_role:
+        return jsonify({"success": False, "message": "ロールは必須です"}), 400
+    
+    success, message = update_user_role(user_id, new_role, session['username'])
+    
+    if success:
+        return jsonify({"success": True, "message": message})
+    else:
+        return jsonify({"success": False, "message": message}), 400
+
+@app.route("/api/user/<int:user_id>/groups", methods=["POST"])
+@csrf.exempt
+@require_auth
+@require_role('admin')
+def api_update_user_groups(user_id):
+    """Update user groups"""
+    new_groups = request.json.get('groups', '')
+    
+    success, message = update_user_groups(user_id, new_groups, session['username'])
+    
+    if success:
+        return jsonify({"success": True, "message": message})
+    else:
+        return jsonify({"success": False, "message": message}), 400
+
+@app.route("/api/user/<int:user_id>/delete", methods=["POST"])
+@csrf.exempt
+@require_auth
+@require_role('admin')
+def api_delete_user(user_id):
+    """Delete user"""
+    success, message = delete_user(user_id, session['username'])
+    
+    if success:
+        return jsonify({"success": True, "message": message})
+    else:
+        return jsonify({"success": False, "message": message}), 400
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8792))
