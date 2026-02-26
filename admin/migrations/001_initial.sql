@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict 10zNgNOC2mRErYXW5ekzch3PTQBghOj6BGLSZM5XngLp2d4CSGSlFBwVfJ2ZtSs
+-- \restrict 10zNgNOC2mRErYXW5ekzch3PTQBghOj6BGLSZM5XngLp2d4CSGSlFBwVfJ2ZtSs
 
 -- Dumped from database version 17.8 (Homebrew)
 -- Dumped by pg_dump version 17.8 (Homebrew)
@@ -374,5 +374,5 @@ ALTER TABLE ONLY shared.sessions
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 10zNgNOC2mRErYXW5ekzch3PTQBghOj6BGLSZM5XngLp2d4CSGSlFBwVfJ2ZtSs
+-- \unrestrict 10zNgNOC2mRErYXW5ekzch3PTQBghOj6BGLSZM5XngLp2d4CSGSlFBwVfJ2ZtSs
 

@@ -93,7 +93,7 @@
     });
     if (!confirm(`Drop ${checked.length} document(s) (${allIds.length} chunks total)?`)) return;
     const resp = await fetch('{{ BASE }}/api/delete', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
+      method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token')},
       body: JSON.stringify({collection: '{{ name }}', ids: allIds})
     });
     const data = await resp.json();
@@ -107,7 +107,7 @@
       const chunks = JSON.parse(this.dataset.chunks);
       if (!confirm(`Delete document "${key}" (${chunks.length} chunks)?`)) return;
       const resp = await fetch('{{ BASE }}/api/delete', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
+        method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token')},
         body: JSON.stringify({collection: '{{ name }}', ids: chunks})
       });
       const data = await resp.json();

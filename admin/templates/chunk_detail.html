@@ -148,7 +148,7 @@ if (saveBtn) saveBtn.addEventListener('click', async function() {
   if (newText === origText) { cancelBtn.click(); return; }
   saveStatus.textContent = '⏳ Saving & re-embedding...';
   const resp = await fetch('{{ BASE }}/api/update_chunk', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
+    method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token')},
     body: JSON.stringify({collection: '{{ name }}', id: '{{ chunk.id }}', document: newText})
   });
   const data = await resp.json();
@@ -162,7 +162,7 @@ const deleteBtn = document.getElementById('delete-chunk-btn');
 if (deleteBtn) deleteBtn.addEventListener('click', async function() {
   if (!confirm('Delete this chunk?')) return;
   const resp = await fetch('{{ BASE }}/api/delete', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
+    method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token')},
     body: JSON.stringify({collection: '{{ name }}', ids: ['{{ chunk.id }}']})
   });
   const data = await resp.json();
@@ -175,7 +175,7 @@ if (deleteBtn) deleteBtn.addEventListener('click', async function() {
 (async function() {
   const doc = origText;
   const resp = await fetch('{{ BASE }}/api/search', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
+    method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token')},
     body: JSON.stringify({collection: '{{ name }}', query: doc.slice(0, 500), n_results: 6})
   });
   const data = await resp.json();

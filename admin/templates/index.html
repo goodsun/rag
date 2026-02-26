@@ -68,7 +68,7 @@ async function doSearch() {
 
   const resp = await fetch(BASE + '/api/search', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token')},
     body: JSON.stringify({collection: col, query: query, n_results: n})
   });
   const data = await resp.json();

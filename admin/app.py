@@ -258,6 +258,12 @@ def generate_csp_nonce():
 
 # Security headers
 @app.after_request
+def set_csrf_cookie(response):
+    from flask_wtf.csrf import generate_csrf
+    response.set_cookie('csrf_token', generate_csrf())
+    return response
+
+@app.after_request
 def add_security_headers(response):
     nonce = getattr(g, 'csp_nonce', '')
     response.headers['Content-Security-Policy'] = (
@@ -744,7 +750,6 @@ def api_search():
     return jsonify({"results": items, "query": query, "collection": col_name})
 
 @app.route("/api/update_chunk", methods=["POST"])
-@csrf.exempt
 @require_auth
 def api_update_chunk():
     try:
@@ -818,7 +823,6 @@ def api_update_chunk():
         return jsonify({"error": "チャンクの更新中にエラーが発生しました"}), 500
 
 @app.route("/api/rechunk", methods=["POST"])
-@csrf.exempt
 @require_auth
 def api_rechunk():
     """Re-chunk a document: delete all chunks, re-split, re-embed."""
@@ -942,7 +946,6 @@ def api_rechunk():
         return jsonify({"error": "ドキュメントの再チャンク中にエラーが発生しました"}), 500
 
 @app.route("/api/delete", methods=["POST"])
-@csrf.exempt
 @require_auth
 def api_delete():
     try:
@@ -1188,7 +1191,6 @@ def audit_logs():
 # User management API endpoints
 
 @app.route("/api/user/<int:user_id>/password", methods=["POST"])
-@csrf.exempt
 @require_auth
 @require_role('admin')
 def api_update_user_password(user_id):
@@ -1206,7 +1208,6 @@ def api_update_user_password(user_id):
         return jsonify({"success": False, "message": message}), 400
 
 @app.route("/api/user/<int:user_id>/role", methods=["POST"])
-@csrf.exempt
 @require_auth
 @require_role('admin')
 def api_update_user_role(user_id):
@@ -1224,7 +1225,6 @@ def api_update_user_role(user_id):
         return jsonify({"success": False, "message": message}), 400
 
 @app.route("/api/user/<int:user_id>/groups", methods=["POST"])
-@csrf.exempt
 @require_auth
 @require_role('admin')
 def api_update_user_groups(user_id):
@@ -1239,7 +1239,6 @@ def api_update_user_groups(user_id):
         return jsonify({"success": False, "message": message}), 400
 
 @app.route("/api/user/<int:user_id>/delete", methods=["POST"])
-@csrf.exempt
 @require_auth
 @require_role('admin')
 def api_delete_user(user_id):

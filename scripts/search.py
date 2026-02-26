@@ -2,12 +2,13 @@
 """RAG検索CLI — pgvector + ollama nomic-embed-text版"""
 
 import json
+import os
 import sys
 import urllib.request
 
 import psycopg2
 
-DB_DSN = "dbname=bonsoleil user=teddy"
+DB_DSN = os.environ.get("DB_DSN", "dbname=bonsoleil user=teddy")
 OLLAMA_URL = "http://localhost:11434/api/embed"
 EMBEDDING_MODEL = "nomic-embed-text"
 DEFAULT_COLLECTION = "teddy_notes"

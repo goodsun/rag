@@ -118,7 +118,7 @@ document.querySelectorAll('.role-select').forEach(function(select) {
     try {
       const response = await fetch(BASE + '/api/user/' + userId + '/role', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token') },
         body: JSON.stringify({ role: newRole })
       });
       const result = await response.json();
@@ -144,7 +144,7 @@ document.querySelectorAll('.save-groups-btn').forEach(function(btn) {
     try {
       const response = await fetch(BASE + '/api/user/' + userId + '/groups', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token') },
         body: JSON.stringify({ groups: input.value.trim() })
       });
       const result = await response.json();
@@ -191,7 +191,7 @@ document.getElementById('submitPwBtn').addEventListener('click', async function(
   try {
     const response = await fetch(BASE + '/api/user/' + currentUserId + '/password', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token') },
       body: JSON.stringify({ password: newPassword })
     });
     const result = await response.json();
@@ -211,7 +211,7 @@ document.querySelectorAll('.delete-user-btn').forEach(function(btn) {
     try {
       const response = await fetch(BASE + '/api/user/' + userId + '/delete', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token') }
       });
       const result = await response.json();
       if (result.success) { alert(result.message); location.reload(); }
