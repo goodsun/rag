@@ -24,21 +24,23 @@ def get_embedding(text: str) -> list[float]:
 def search(query: str, n: int = 5, collection: str = DEFAULT_COLLECTION):
     emb = get_embedding(query)
     conn = psycopg2.connect(DB_DSN)
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT
-            title,
-            url,
-            1 - (embedding <=> %s::vector) AS score,
-            content
-        FROM rag.chunks
-        WHERE collection = %s
-        ORDER BY embedding <=> %s::vector
-        LIMIT %s
-    """, (json.dumps(emb), collection, json.dumps(emb), n))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                title,
+                url,
+                1 - (embedding <=> %s::vector) AS score,
+                content
+            FROM rag.chunks
+            WHERE collection = %s
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+        """, (json.dumps(emb), collection, json.dumps(emb), n))
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
 
     return [
         {

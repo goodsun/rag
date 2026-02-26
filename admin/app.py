@@ -232,6 +232,8 @@ if os.path.exists(_staff_key_file):
         app.secret_key = _f.read().strip()
 else:
     app.secret_key = os.environ.get('SECRET_KEY') or os.urandom(32)
+    if not os.environ.get('SECRET_KEY'):
+        app.logger.warning("SECRET_KEY file not found, using random key — sessions will not persist across restarts")
 app.config["APPLICATION_ROOT"] = os.environ.get("APP_ROOT", "/")
 
 # Flask-Session configuration
@@ -692,7 +694,6 @@ def api_roles(name):
     return jsonify(roles)
 
 @app.route("/api/search", methods=["POST"])
-@csrf.exempt
 @require_auth
 def api_search():
     data = request.json
