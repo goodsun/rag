@@ -11,3 +11,5 @@ venv/
 
 # OS
 .DS_Store
+admin/sessions/
+.playwright-cli/

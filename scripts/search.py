@@ -8,7 +8,7 @@ from fastembed import TextEmbedding
 from pathlib import Path
 
 CHROMA_DIR = str(Path(__file__).parent.parent / "chroma_db")
-COLLECTION_NAME = "note_articles"
+COLLECTION_NAME = "teddy_notes"
 MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 

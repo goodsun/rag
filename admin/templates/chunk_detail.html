@@ -20,7 +20,7 @@
 
 <div style="margin-bottom:12px">
   {% if can_write %}
-  <button class="pma-btn danger" onclick="deleteChunk()">🗑️ Drop</button>
+  <button class="pma-btn danger" id="delete-chunk-btn">🗑️ Drop</button>
   {% endif %}
   {% set parts = chunk.id.rsplit('_c', 1) %}
   {% if parts|length == 2 %}
@@ -86,66 +86,80 @@
 
 <h3>📝 Document Content <span style="font-weight:normal;font-size:11px;color:#888">(<span id="char-count">{{ chunk.document|length }}</span> chars)</span>
   {% if can_write %}
-  <button class="pma-btn pma-btn-sm" id="edit-toggle" onclick="toggleEdit()" style="margin-left:8px">✏️ Edit</button>
-  <button class="pma-btn pma-btn-sm" id="save-btn" onclick="saveChunk()" style="margin-left:4px;display:none">💾 Save</button>
-  <button class="pma-btn pma-btn-sm" id="cancel-btn" onclick="cancelEdit()" style="margin-left:4px;display:none">Cancel</button>
+  <button class="pma-btn pma-btn-sm" id="edit-toggle" style="margin-left:8px">✏️ Edit</button>
+  <button class="pma-btn pma-btn-sm" id="save-btn" style="margin-left:4px;display:none">💾 Save</button>
+  <button class="pma-btn pma-btn-sm" id="cancel-btn" style="margin-left:4px;display:none">Cancel</button>
   <span id="save-status" style="font-size:11px;color:#666;margin-left:8px"></span>
   {% else %}
   <span style="font-size:11px;color:#888;margin-left:8px">({{ user_role }} - read only)</span>
   {% endif %}
 </h3>
 <div class="chunk-content" id="content-view">{{ chunk.document }}</div>
-<textarea id="content-edit" style="display:none;width:100%;min-height:400px;padding:12px;font-family:monospace;font-size:12px;line-height:1.7;border:2px solid #235a81;border-radius:3px;background:#fffff0;resize:vertical" oninput="document.getElementById('char-count').textContent=this.value.length">{{ chunk.document }}</textarea>
+{% if can_write %}
+<textarea id="content-edit" style="display:none;width:100%;min-height:400px;padding:12px;font-family:monospace;font-size:12px;line-height:1.7;border:2px solid #235a81;border-radius:3px;background:#fffff0;resize:vertical">{{ chunk.document }}</textarea>
+{% endif %}
 
 <h3 style="margin-top:16px">🔍 Similar Chunks</h3>
 <div id="similar-results"><div class="loading">⏳ Loading similar chunks...</div></div>
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ csp_nonce }}">
+(function() {
 let editing = false;
 const origText = {{ chunk.document|tojson }};
 
-function toggleEdit() {
+const editToggle = document.getElementById('edit-toggle');
+const saveBtn = document.getElementById('save-btn');
+const cancelBtn = document.getElementById('cancel-btn');
+const contentView = document.getElementById('content-view');
+const contentEdit = document.getElementById('content-edit');
+const charCount = document.getElementById('char-count');
+const saveStatus = document.getElementById('save-status');
+
+if (contentEdit) {
+  contentEdit.addEventListener('input', function() { charCount.textContent = this.value.length; });
+}
+
+if (editToggle) editToggle.addEventListener('click', function() {
   editing = true;
-  document.getElementById('content-view').style.display = 'none';
-  document.getElementById('content-edit').style.display = 'block';
-  document.getElementById('edit-toggle').style.display = 'none';
-  document.getElementById('save-btn').style.display = 'inline-block';
-  document.getElementById('cancel-btn').style.display = 'inline-block';
-  document.getElementById('content-edit').focus();
-}
-function cancelEdit() {
+  contentView.style.display = 'none';
+  contentEdit.style.display = 'block';
+  editToggle.style.display = 'none';
+  saveBtn.style.display = 'inline-block';
+  cancelBtn.style.display = 'inline-block';
+  contentEdit.focus();
+});
+
+if (cancelBtn) cancelBtn.addEventListener('click', function() {
   editing = false;
-  document.getElementById('content-view').style.display = 'block';
-  document.getElementById('content-edit').style.display = 'none';
-  document.getElementById('content-edit').value = origText;
-  document.getElementById('edit-toggle').style.display = 'inline-block';
-  document.getElementById('save-btn').style.display = 'none';
-  document.getElementById('cancel-btn').style.display = 'none';
-  document.getElementById('save-status').textContent = '';
-  document.getElementById('char-count').textContent = origText.length;
-}
-async function saveChunk() {
-  const newText = document.getElementById('content-edit').value;
-  if (newText === origText) { cancelEdit(); return; }
-  
-  const status = document.getElementById('save-status');
-  status.textContent = '⏳ Saving & re-embedding...';
-  
+  contentView.style.display = 'block';
+  contentEdit.style.display = 'none';
+  contentEdit.value = origText;
+  editToggle.style.display = 'inline-block';
+  saveBtn.style.display = 'none';
+  cancelBtn.style.display = 'none';
+  saveStatus.textContent = '';
+  charCount.textContent = origText.length;
+});
+
+if (saveBtn) saveBtn.addEventListener('click', async function() {
+  const newText = contentEdit.value;
+  if (newText === origText) { cancelBtn.click(); return; }
+  saveStatus.textContent = '⏳ Saving & re-embedding...';
   const resp = await fetch('{{ BASE }}/api/update_chunk', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({collection: '{{ name }}', id: '{{ chunk.id }}', document: newText})
   });
   const data = await resp.json();
-  if (data.error) { status.textContent = '❌ ' + data.error; return; }
-  
-  status.textContent = `✅ Saved (${data.new_length} chars, re-embedded)`;
-  document.getElementById('content-view').textContent = newText;
-  setTimeout(() => location.reload(), 1000);
-}
+  if (data.error) { saveStatus.textContent = '❌ ' + data.error; return; }
+  saveStatus.textContent = `✅ Saved (${data.new_length} chars, re-embedded)`;
+  contentView.textContent = newText;
+  setTimeout(function() { location.reload(); }, 1000);
+});
 
-async function deleteChunk() {
+const deleteBtn = document.getElementById('delete-chunk-btn');
+if (deleteBtn) deleteBtn.addEventListener('click', async function() {
   if (!confirm('Delete this chunk?')) return;
   const resp = await fetch('{{ BASE }}/api/delete', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -155,8 +169,9 @@ async function deleteChunk() {
   if (data.error) { alert(data.error); return; }
   alert('Deleted.');
   location.href = '{{ BASE }}/collection/{{ name }}';
-}
+});
 
+// Similar chunks
 (async function() {
   const doc = origText;
   const resp = await fetch('{{ BASE }}/api/search', {
@@ -165,23 +180,24 @@ async function deleteChunk() {
   });
   const data = await resp.json();
   const el = document.getElementById('similar-results');
-  const results = data.results.filter(r => r.id !== '{{ chunk.id }}').slice(0, 5);
-  
+  const results = data.results.filter(function(r) { return r.id !== '{{ chunk.id }}'; }).slice(0, 5);
+
   if (!results.length) { el.innerHTML = '<div class="pma-notice">No similar chunks found</div>'; return; }
-  
+
   let html = '<table class="pma-table"><thead><tr><th>Distance</th><th>Source</th><th>Preview</th><th></th></tr></thead><tbody>';
-  results.forEach(r => {
-    html += `<tr>
-      <td><span class="distance">${r.distance}</span></td>
-      <td style="font-size:11px">${escHtml(r.metadata?.document_title || r.metadata?.article_title || r.metadata?.title || r.id)}</td>
-      <td class="truncate">${escHtml(r.document.slice(0, 150))}</td>
-      <td><a href="${BASE}/collection/{{ name }}/chunk/${encodeURIComponent(r.id)}" class="pma-btn pma-btn-sm">View</a></td>
-    </tr>`;
+  results.forEach(function(r) {
+    html += '<tr>' +
+      '<td><span class="distance">' + r.distance + '</span></td>' +
+      '<td style="font-size:11px">' + escHtml(r.metadata?.document_title || r.metadata?.article_title || r.metadata?.title || r.id) + '</td>' +
+      '<td class="truncate">' + escHtml(r.document.slice(0, 150)) + '</td>' +
+      '<td><a href="' + BASE + '/collection/{{ name }}/chunk/' + encodeURIComponent(r.id) + '" class="pma-btn pma-btn-sm">View</a></td>' +
+    '</tr>';
   });
   html += '</tbody></table>';
   el.innerHTML = html;
 })();
 
 function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+})();
 </script>
 {% endblock %}

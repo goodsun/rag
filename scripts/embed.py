@@ -16,7 +16,7 @@ from fastembed import TextEmbedding
 
 CHUNKS_FILE = Path(__file__).parent.parent / "data" / "chunks" / "all_chunks.json"
 CHROMA_DIR = Path(__file__).parent.parent / "chroma_db"
-COLLECTION_NAME = "note_articles"
+COLLECTION_NAME = "teddy_notes"
 EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 BATCH_SIZE = 50
 

@@ -36,6 +36,8 @@ PRODUCTS = [
         "origin": "https://github.com/goodsun/XPathGenie",
         "files": [
             ("~/tools/XPathGenie/README.md", "README"),
+            ("~/tools/XPathGenie/extension/README_JP.md", "XPathAbu — DomCatcher (日本語)"),
+            ("~/tools/XPathGenie/extension/README.md", "XPathAbu — DomCatcher"),
             ("~/tools/XPathGenie/docs/DESIGN.md", "Design"),
             ("~/tools/XPathGenie/docs/whitepaper_jp.md", "Whitepaper (日本語)"),
         ]
