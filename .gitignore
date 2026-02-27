@@ -20,10 +20,10 @@ venv/
 
 # OS
 .DS_Store
-admin/sessions/
-*.db
+
+# テストファイル
 test_*.py
 final_test.py
-data/raw_*/
-data/chunks_*/
+
+# 環境設定
 .env

@@ -36,16 +36,17 @@ def search(query: str, n: int = 5, collection: str = DEFAULT_COLLECTION):
     try:
         cur = conn.cursor()
         cur.execute("""
+            WITH q AS (SELECT %s::vector AS vec)
             SELECT
                 title,
                 url,
-                1 - (embedding <=> %s::vector) AS score,
+                1 - (embedding <=> q.vec) AS score,
                 content
-            FROM rag.chunks
+            FROM rag.chunks, q
             WHERE collection = %s
-            ORDER BY embedding <=> %s::vector
+            ORDER BY embedding <=> q.vec
             LIMIT %s
-        """, (json.dumps(emb), collection, json.dumps(emb), n))
+        """, (json.dumps(emb), collection, n))
         rows = cur.fetchall()
     finally:
         cur.close()

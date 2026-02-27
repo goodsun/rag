@@ -89,6 +89,8 @@ def main():
 
         total = 0
         # 再構築モードは既存チャンクを削除（先にcommit）
+        # 注意: このDELETEは先にコミットされるため、後続のINSERTが失敗しても元に戻らない。
+        # 再構築中はコレクションが一時的に空になるため、サービス停止中に実行すること。
         if not args.append:
             cur.execute("DELETE FROM rag.chunks WHERE collection = %s", (args.collection,))
             conn.commit()
