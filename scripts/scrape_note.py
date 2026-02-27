@@ -11,7 +11,10 @@ from html import unescape
 from pathlib import Path
 
 # 設定
-NOTE_USERNAME = os.environ.get("NOTE_USERNAME", "flow_theory")
+NOTE_USERNAME = os.environ.get("NOTE_USERNAME", "")
+if not NOTE_USERNAME:
+    sys.exit("ERROR: NOTE_USERNAME が設定されていません。.env を確認してください。\n例: NOTE_USERNAME=your_note_username")
+
 RAW_DIR = Path(os.environ.get("RAW_DIR", str(Path(__file__).parent.parent / "data" / "raw")))
 PER_PAGE = 6  # noteのAPIは6件固定で返す
 DELAY = 1  # API呼び出し間隔（秒）

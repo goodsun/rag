@@ -1,45 +1,74 @@
 #!/usr/bin/env python3
-"""RAG検索CLI — テディがexecで呼び出す用"""
+"""RAG検索CLI — pgvector + ollama nomic-embed-text版"""
 
 import json
+import os
+from pathlib import Path as _Path
+from dotenv import load_dotenv
+load_dotenv(_Path(__file__).parent.parent / ".env")
 import sys
-import chromadb
-from fastembed import TextEmbedding
-from pathlib import Path
+import urllib.request
 
-CHROMA_DIR = str(Path(__file__).parent.parent / "chroma_db")
-COLLECTION_NAME = "note_articles"
-MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+import psycopg2
+
+DB_DSN = os.environ.get("DB_DSN", "")
+if not DB_DSN:
+    sys.exit(
+        "ERROR: DB_DSN が設定されていません。.env を確認してください。\n"
+        "例: DB_DSN=host=localhost dbname=mydb user=myuser password=mypassword\n"
+        "参考: .env.sample"
+    )
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/embed")
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
+DEFAULT_COLLECTION = "teddy_notes"
 
 
-class FastEmbedFunction(chromadb.EmbeddingFunction):
-    def __init__(self, model_name: str):
-        self.model = TextEmbedding(model_name)
-    def __call__(self, input: list[str]) -> list[list[float]]:
-        return [e.tolist() for e in self.model.embed(input)]
+def get_embedding(text: str) -> list[float]:
+    data = json.dumps({"model": EMBEDDING_MODEL, "input": [text]}).encode()
+    req = urllib.request.Request(OLLAMA_URL, data=data, headers={"Content-Type": "application/json"})
+    res = urllib.request.urlopen(req, timeout=30)
+    return json.loads(res.read())["embeddings"][0]
 
 
-def search(query: str, n: int = 5):
-    ef = FastEmbedFunction(MODEL)
-    client = chromadb.PersistentClient(path=CHROMA_DIR)
-    col = client.get_collection(name=COLLECTION_NAME, embedding_function=ef)
+def search(query: str, n: int = 5, collection: str = DEFAULT_COLLECTION):
+    emb = get_embedding(query)
+    conn = psycopg2.connect(DB_DSN)
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            WITH q AS (SELECT %s::vector AS vec)
+            SELECT
+                title,
+                url,
+                1 - (embedding <=> q.vec) AS score,
+                content
+            FROM rag.chunks, q
+            WHERE collection = %s
+            ORDER BY embedding <=> q.vec
+            LIMIT %s
+        """, (json.dumps(emb), collection, n))
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
 
-    results = col.query(query_texts=[query], n_results=n)
-    items = []
-    for doc, meta, dist in zip(
-        results["documents"][0], results["metadatas"][0], results["distances"][0]
-    ):
-        items.append({
-            "distance": round(dist, 4),
-            "title": meta.get('title', ''),
-            "url": (meta.get('origin','') + meta.get('key','')),
-            "text": doc[:300],
-        })
-    return items
+    return [
+        {
+            "score": round(score, 4),
+            "title": title,
+            "url": url,
+            "text": content[:300],
+        }
+        for title, url, score, content in rows
+    ]
 
 
 if __name__ == "__main__":
-    query = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "法華経"
-    n = 5
-    results = search(query, n)
+    import argparse
+    p = argparse.ArgumentParser(description="RAG検索CLI")
+    p.add_argument("query", nargs="*", default=["法華経"])
+    p.add_argument("--collection", default=DEFAULT_COLLECTION, help="検索対象コレクション")
+    p.add_argument("-n", type=int, default=5, help="取得件数")
+    args = p.parse_args()
+    results = search(" ".join(args.query), args.n, args.collection)
     print(json.dumps(results, ensure_ascii=False, indent=2))

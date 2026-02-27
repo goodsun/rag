@@ -1,7 +1,16 @@
 # 取得データ・生成物
 data/raw/
+data/raw_*/
 data/chunks/
+data/chunks_*/
 chroma_db/
+
+# セッションファイル
+admin/sessions/
+*.db
+
+# ツールキャッシュ
+.playwright-cli/
 
 # Python
 __pycache__/
@@ -11,3 +20,10 @@ venv/
 
 # OS
 .DS_Store
+
+# テストファイル
+test_*.py
+final_test.py
+
+# 環境設定
+.env

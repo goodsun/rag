@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}ragMyAdmin{% endblock %}</title>
-<style>
+<style nonce="{{ csp_nonce }}">
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: sans-serif; font-size: 13px; color: #333; background: #e7e7e7; }
   a { color: #235a81; text-decoration: none; }
@@ -104,8 +104,17 @@
     <div class="logo">🗄️ <span>rag</span>MyAdmin</div>
     <nav>
       <a href="{{ BASE }}/" {% if request.endpoint == 'index' %}class="active"{% endif %}>🏠 Dashboard</a>
+      {% if session.role == 'admin' %}
+      <a href="{{ BASE }}/users" {% if request.endpoint in ['users_list', 'users_add'] %}class="active"{% endif %}>👥 Users</a>
+      <a href="{{ BASE }}/audit" {% if request.endpoint == 'audit_logs' %}class="active"{% endif %}>📋 Audit Log</a>
+      {% endif %}
     </nav>
-    <div class="server-info">ChromaDB @ {{ BASE or 'localhost' }} | Collections: {% block col_count %}?{% endblock %}</div>
+    <div class="server-info">
+      pgvector @ {{ BASE or 'localhost' }} | Collections: {% block col_count %}?{% endblock %}
+      {% if session.username %}
+        | 👤 {{ session.username }} ({{ session.role }}) | <a href="{{ BASE }}/logout">Logout</a>
+      {% endif %}
+    </div>
   </div>
   <div class="pma-layout">
     <div class="pma-sidebar">
@@ -117,10 +126,42 @@
       {% block content %}{% endblock %}
     </div>
   </div>
-  <script>
+  <script nonce="{{ csp_nonce }}">
     const BASE = "{{ BASE }}";
     const CURRENT_COLLECTION = "{{ current_collection|default('') }}";
     const CURRENT_VIEW = "{{ current_view|default('') }}";
+    
+    // Get cookie by name (for CSRF token)
+    function getCookie(name) {
+      const match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/([.$?*|{}()[\]\\/+^])/g, '\\$1') + '=([^;]*)'));
+      return match ? decodeURIComponent(match[1]) : '';
+    }
+
+    // Common fetch wrapper with error handling
+    async function apiRequest(url, options = {}) {
+      try {
+        const method = (options.method || 'GET').toUpperCase();
+        const csrfHeaders = (method !== 'GET' && method !== 'HEAD') ? {'X-CSRFToken': getCookie('csrf_token')} : {};
+        const response = await fetch(url, {
+          headers: {
+            'Content-Type': 'application/json',
+            ...csrfHeaders,
+            ...options.headers
+          },
+          ...options
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: 'ネットワークエラー' }));
+          throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+        
+        return await response.json();
+      } catch (error) {
+        console.error('API request failed:', error);
+        throw error;
+      }
+    }
     
     // Build sidebar dynamically
     fetch(`${BASE}/api/collections`).then(r => r.json()).then(cols => {

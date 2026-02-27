@@ -14,7 +14,7 @@
 
 <h2 class="pma-heading">📊 General Settings</h2>
 <div class="pma-notice">
-  ChromaDB server running. {{ collections|length }} collection(s) with {{ collections|sum(attribute='count') }} total chunks.
+  pgvector running. {{ collections|length }} collection(s) with {{ collections|sum(attribute='count') }} total chunks.
 </div>
 
 <table class="pma-table">
@@ -28,8 +28,8 @@
     <td>{{ col.count }}</td>
     <td>
       <a href="{{ BASE }}/collection/{{ col.name }}" class="pma-btn pma-btn-sm">📰 Browse</a>
-      <button class="pma-btn pma-btn-sm" onclick="loadStats('{{ col.name }}')">📊 Stats</button>
-      <a href="#search" class="pma-btn pma-btn-sm" onclick="document.getElementById('search-query').focus()">🔍 Search</a>
+      <button class="pma-btn pma-btn-sm stats-btn" data-col="{{ col.name }}">📊 Stats</button>
+      <a href="#search" class="pma-btn pma-btn-sm search-focus-btn">🔍 Search</a>
     </td>
   </tr>
   {% endfor %}
@@ -43,9 +43,9 @@
     <option value="{{ col.name }}">{{ col.name }}</option>
     {% endfor %}
   </select>
-  <input type="text" id="search-query" placeholder="Search query..." onkeydown="if(event.key==='Enter')doSearch()">
+  <input type="text" id="search-query" placeholder="Search query...">
   <label style="font-size:11px;color:#666;display:flex;align-items:center;gap:2px">n=<input type="number" id="search-n" value="10" min="1" max="50"></label>
-  <button class="pma-btn" onclick="doSearch()">🔍 Go</button>
+  <button class="pma-btn" id="search-go-btn">🔍 Go</button>
 </div>
 <div id="search-results"></div>
 
@@ -56,7 +56,8 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ csp_nonce }}">
+(function() {
 async function doSearch() {
   const query = document.getElementById('search-query').value.trim();
   if (!query) return;
@@ -64,33 +65,39 @@ async function doSearch() {
   const n = document.getElementById('search-n').value;
   const el = document.getElementById('search-results');
   el.innerHTML = '<div class="loading">⏳ Searching...</div>';
-  
+
   const resp = await fetch(BASE + '/api/search', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token')},
     body: JSON.stringify({collection: col, query: query, n_results: n})
   });
   const data = await resp.json();
-  
+
   if (!data.results.length) {
     el.innerHTML = '<div class="pma-notice">No results found.</div>';
     return;
   }
-  
-  let html = `<div class="pma-success">${data.results.length} results for "<b>${escHtml(query)}</b>"</div>`;
+
+  let html = '<div class="pma-success">' + data.results.length + ' results for "<b>' + escHtml(query) + '</b>"</div>';
   html += '<table class="pma-table"><thead><tr><th>#</th><th>Distance</th><th>Source</th><th>Document</th><th></th></tr></thead><tbody>';
-  data.results.forEach((r, i) => {
-    html += `<tr>
-      <td>${i+1}</td>
-      <td><span class="distance">${r.distance}</span></td>
-      <td style="font-size:11px">${escHtml(r.metadata?.document_title || r.metadata?.article_title || r.metadata?.title || r.id)}</td>
-      <td class="truncate">${escHtml(r.document.slice(0, 200))}</td>
-      <td><a href="${BASE}/collection/${col}/chunk/${encodeURIComponent(r.id)}" class="pma-btn pma-btn-sm">Detail</a></td>
-    </tr>`;
+  data.results.forEach(function(r, i) {
+    html += '<tr>' +
+      '<td>' + (i+1) + '</td>' +
+      '<td><span class="distance">' + r.distance + '</span></td>' +
+      '<td style="font-size:11px">' + escHtml(r.metadata?.document_title || r.metadata?.article_title || r.metadata?.title || r.id) + '</td>' +
+      '<td class="truncate">' + escHtml(r.document.slice(0, 200)) + '</td>' +
+      '<td><a href="' + BASE + '/collection/' + col + '/chunk/' + encodeURIComponent(r.id) + '" class="pma-btn pma-btn-sm">Detail</a></td>' +
+    '</tr>';
   });
   html += '</tbody></table>';
   el.innerHTML = html;
 }
+
+document.getElementById('search-go-btn').addEventListener('click', doSearch);
+document.getElementById('search-query').addEventListener('keydown', function(e) { if (e.key === 'Enter') doSearch(); });
+document.querySelectorAll('.search-focus-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() { document.getElementById('search-query').focus(); });
+});
 
 async function loadStats(name) {
   const panel = document.getElementById('stats-panel');
@@ -98,35 +105,34 @@ async function loadStats(name) {
   document.getElementById('stats-name').textContent = name;
   panel.style.display = 'block';
   content.innerHTML = '<div class="loading">⏳ Loading...</div>';
-  
-  const resp = await fetch(`${BASE}/api/stats/${name}`);
+
+  const resp = await fetch(BASE + '/api/stats/' + name);
   const data = await resp.json();
-  
+
   const maxCount = Math.max(...Object.values(data.sources));
   const dl = data.doc_lengths || {};
-  // Also fetch auto-detected roles
-  const rolesResp = await fetch(`${BASE}/api/roles/${name}`);
+  const rolesResp = await fetch(BASE + '/api/roles/' + name);
   const roles = await rolesResp.json();
-  const rolesHtml = Object.entries(roles).filter(([k,v]) => v).map(([k,v]) => `<code>${k} → ${v}</code>`).join(' ');
-  
-  let html = `<div class="pma-notice">
-    <b>${data.count}</b> chunks | <b>${data.metadata_keys.length}</b> metadata keys | <b>${Object.keys(data.sources).length}</b> sources<br>
-    Keys: ${data.metadata_keys.map(k => `<code>${k}</code>`).join(' ')}
-    ${dl.avg ? `<br>📏 Chunk length: min <b>${dl.min}</b> / avg <b>${dl.avg}</b> / median <b>${dl.median}</b> / max <b>${dl.max}</b> chars | Total: <b>${(dl.total_chars/1000).toFixed(0)}K</b> chars` : ''}
-    ${rolesHtml ? `<br>🔍 Auto-detected roles: ${rolesHtml}` : ''}
-  </div>`;
-  html += '<h3>📄 Source Distribution (Top 30)</h3>';
-  Object.entries(data.sources).forEach(([src, cnt]) => {
-    html += `<div class="source-bar">
-      <div class="name" title="${escHtml(src)}">${escHtml(src)}</div>
-      <div class="bar" style="width:${Math.max(cnt/maxCount*200, 3)}px"></div>
-      <div class="count">${cnt}</div>
-    </div>`;
+  const rolesHtml = Object.entries(roles).filter(function(e) { return e[1]; }).map(function(e) { return '<code>' + e[0] + ' → ' + e[1] + '</code>'; }).join(' ');
+
+  let html = '<div class="pma-notice">' +
+    '<b>' + data.count + '</b> chunks | <b>' + data.metadata_keys.length + '</b> metadata keys | <b>' + Object.keys(data.sources).length + '</b> sources<br>' +
+    'Keys: ' + data.metadata_keys.map(function(k) { return '<code>' + k + '</code>'; }).join(' ');
+  if (dl.avg) html += '<br>📏 Chunk length: min <b>' + dl.min + '</b> / avg <b>' + dl.avg + '</b> / median <b>' + dl.median + '</b> / max <b>' + dl.max + '</b> chars | Total: <b>' + (dl.total_chars/1000).toFixed(0) + 'K</b> chars';
+  if (rolesHtml) html += '<br>🔍 Auto-detected roles: ' + rolesHtml;
+  html += '</div><h3>📄 Source Distribution (Top 30)</h3>';
+  Object.entries(data.sources).forEach(function(e) {
+    html += '<div class="source-bar"><div class="name" title="' + escHtml(e[0]) + '">' + escHtml(e[0]) + '</div><div class="bar" style="width:' + Math.max(e[1]/maxCount*200, 3) + 'px"></div><div class="count">' + e[1] + '</div></div>';
   });
   content.innerHTML = html;
   panel.scrollIntoView({behavior:'smooth'});
 }
 
+document.querySelectorAll('.stats-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() { loadStats(this.dataset.col); });
+});
+
 function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+})();
 </script>
 {% endblock %}

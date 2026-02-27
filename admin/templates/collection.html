@@ -13,17 +13,19 @@
 <h2 class="pma-heading">📋 {% if doc_title is defined and doc_title %}{{ doc_title }}{% else %}{{ name }}{% endif %} ({{ total }} chunks)</h2>
 
 <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
-  <input type="text" id="filter-input" placeholder="Filter rows..." oninput="filterRows()" style="padding:4px 8px;border:1px solid #aaa;border-radius:3px;font-size:12px;width:250px">
-  <button class="pma-btn danger" id="delete-btn" style="display:none" onclick="deleteSelected()">🗑️ Delete selected</button>
+  <input type="text" id="filter-input" placeholder="Filter rows..." style="padding:4px 8px;border:1px solid #aaa;border-radius:3px;font-size:12px;width:250px">
+  {% if can_write %}
+  <button class="pma-btn danger" id="delete-btn" style="display:none">🗑️ Delete selected</button>
   {% if doc_key is defined and doc_key %}
   <a href="{{ BASE }}/collection/{{ name }}/document/{{ doc_key }}/edit" class="pma-btn pma-btn-sm" style="margin-left:auto">✏️ Edit Document</a>
+  {% endif %}
   {% endif %}
 </div>
 
 <table class="pma-table" id="chunks-table">
   <thead>
     <tr>
-      <th style="width:25px"><input type="checkbox" onchange="toggleAll(this)" title="Check all"></th>
+      <th style="width:25px">{% if can_write %}<input type="checkbox" id="check-all" title="Check all">{% endif %}</th>
       <th>ID</th>
       <th>Title</th>
       <th>Document (preview)</th>
@@ -34,14 +36,16 @@
   <tbody>
   {% for chunk in chunks %}
     <tr data-id="{{ chunk.id }}">
-      <td><input type="checkbox" class="chunk-cb" value="{{ chunk.id }}" onchange="updateDeleteBtn()"></td>
+      <td>{% if can_write %}<input type="checkbox" class="chunk-cb" value="{{ chunk.id }}">{% endif %}</td>
       <td><a href="{{ BASE }}/collection/{{ name }}/chunk/{{ chunk.id }}">{% if '_' in chunk.id %}{{ chunk.id.split('_')[-1] }}{% else %}{{ chunk.id[:35] }}{% endif %}</a></td>
       <td style="max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px" title="{{ chunk.title }}">{% if chunk.url %}<a href="{{ chunk.url }}" target="_blank">{{ chunk.title }}</a>{% else %}{{ chunk.title }}{% endif %}</td>
       <td style="max-width:400px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="{{ chunk.document }}">{{ chunk.document }}</td>
       <td style="text-align:right">{{ chunk.full_document|length }}</td>
       <td style="white-space:nowrap">
-        <a href="{{ BASE }}/collection/{{ name }}/chunk/{{ chunk.id }}" class="pma-btn pma-btn-sm" title="Edit">✏️</a>
-        <button class="pma-btn pma-btn-sm" title="Delete" onclick="deleteSingle('{{ chunk.id }}')">🗑️</button>
+        <a href="{{ BASE }}/collection/{{ name }}/chunk/{{ chunk.id }}" class="pma-btn pma-btn-sm" title="View">👁️</a>
+        {% if can_write %}
+        <button class="pma-btn pma-btn-sm delete-single-btn" title="Delete" data-id="{{ chunk.id }}">🗑️</button>
+        {% endif %}
       </td>
     </tr>
   {% endfor %}
@@ -66,45 +70,52 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
-async function deleteSingle(id) {
-  if (!confirm(`Delete chunk "${id}"?`)) return;
-  const resp = await fetch('{{ BASE }}/api/delete', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({collection: '{{ name }}', ids: [id]})
+<script nonce="{{ csp_nonce }}">
+(function() {
+  function updateDeleteBtn() {
+    const n = document.querySelectorAll('.chunk-cb:checked').length;
+    const btn = document.getElementById('delete-btn');
+    if (btn) { btn.style.display = n ? 'inline-block' : 'none'; btn.textContent = `🗑️ Delete selected (${n})`; }
+  }
+  document.getElementById('filter-input').addEventListener('input', function() {
+    const q = this.value.toLowerCase();
+    document.querySelectorAll('#chunks-table tbody tr').forEach(tr => {
+      tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
   });
-  const data = await resp.json();
-  if (data.error) { alert(data.error); return; }
-  location.reload();
-}
-function toggleAll(el) {
-  document.querySelectorAll('.chunk-cb').forEach(cb => { cb.checked = el.checked; });
-  updateDeleteBtn();
-}
-function updateDeleteBtn() {
-  const n = document.querySelectorAll('.chunk-cb:checked').length;
-  const btn = document.getElementById('delete-btn');
-  btn.style.display = n ? 'inline-block' : 'none';
-  btn.textContent = `🗑️ Delete selected (${n})`;
-}
-async function deleteSelected() {
-  const ids = [...document.querySelectorAll('.chunk-cb:checked')].map(cb => cb.value);
-  if (!ids.length) return;
-  if (!confirm(`Delete ${ids.length} chunk(s)?`)) return;
-  const resp = await fetch('{{ BASE }}/api/delete', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({collection: '{{ name }}', ids})
+  const checkAll = document.getElementById('check-all');
+  if (checkAll) checkAll.addEventListener('change', function() {
+    document.querySelectorAll('.chunk-cb').forEach(cb => { cb.checked = this.checked; });
+    updateDeleteBtn();
   });
-  const data = await resp.json();
-  if (data.error) { alert(data.error); return; }
-  alert(`Deleted ${data.deleted} chunk(s). Remaining: ${data.remaining}`);
-  location.reload();
-}
-function filterRows() {
-  const q = document.getElementById('filter-input').value.toLowerCase();
-  document.querySelectorAll('#chunks-table tbody tr').forEach(tr => {
-    tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+  document.querySelectorAll('.chunk-cb').forEach(cb => cb.addEventListener('change', updateDeleteBtn));
+  const deleteBtn = document.getElementById('delete-btn');
+  if (deleteBtn) deleteBtn.addEventListener('click', async function() {
+    const ids = [...document.querySelectorAll('.chunk-cb:checked')].map(cb => cb.value);
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} chunk(s)?`)) return;
+    const resp = await fetch('{{ BASE }}/api/delete', {
+      method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token')},
+      body: JSON.stringify({collection: '{{ name }}', ids})
+    });
+    const data = await resp.json();
+    if (data.error) { alert(data.error); return; }
+    alert(`Deleted ${data.deleted} chunk(s). Remaining: ${data.remaining}`);
+    location.reload();
   });
-}
+  document.querySelectorAll('.delete-single-btn').forEach(btn => {
+    btn.addEventListener('click', async function() {
+      const id = this.dataset.id;
+      if (!confirm(`Delete chunk "${id}"?`)) return;
+      const resp = await fetch('{{ BASE }}/api/delete', {
+        method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token')},
+        body: JSON.stringify({collection: '{{ name }}', ids: [id]})
+      });
+      const data = await resp.json();
+      if (data.error) { alert(data.error); return; }
+      location.reload();
+    });
+  });
+})();
 </script>
 {% endblock %}
