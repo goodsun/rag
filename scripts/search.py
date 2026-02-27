@@ -3,16 +3,21 @@
 
 import json
 import os
-try:
-    from dotenv import load_dotenv; load_dotenv()
-except ImportError:
-    pass
+from pathlib import Path as _Path
+from dotenv import load_dotenv
+load_dotenv(_Path(__file__).parent.parent / ".env")
 import sys
 import urllib.request
 
 import psycopg2
 
 DB_DSN = os.environ.get("DB_DSN", "")
+if not DB_DSN:
+    sys.exit(
+        "ERROR: DB_DSN が設定されていません。.env を確認してください。\n"
+        "例: DB_DSN=host=localhost dbname=mydb user=myuser password=mypassword\n"
+        "参考: .env.sample"
+    )
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/embed")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
 DEFAULT_COLLECTION = "teddy_notes"

@@ -10,10 +10,9 @@ Usage:
 import argparse
 import json
 import os
-try:
-    from dotenv import load_dotenv; load_dotenv()
-except ImportError:
-    pass
+from pathlib import Path as _Path
+from dotenv import load_dotenv
+load_dotenv(_Path(__file__).parent.parent / ".env")
 import time
 import urllib.request
 from datetime import datetime
@@ -28,6 +27,12 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/embed")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
 BATCH_SIZE = 50
 DB_DSN = os.environ.get("DB_DSN", "")
+if not DB_DSN:
+    sys.exit(
+        "ERROR: DB_DSN が設定されていません。.env を確認してください。\n"
+        "例: DB_DSN=host=localhost dbname=mydb user=myuser password=mypassword\n"
+        "参考: .env.sample"
+    )
 
 
 def parse_date(date_str) -> str | None:
@@ -83,11 +88,13 @@ def main():
         """, (args.collection, f"{args.collection} - nomic-embed-text"))
 
         total = 0
+        # 再構築モードは既存チャンクを削除（先にcommit）
+        if not args.append:
+            cur.execute("DELETE FROM rag.chunks WHERE collection = %s", (args.collection,))
+            conn.commit()
+            print(f"  既存チャンク削除完了")
+
         try:
-            # 再構築モードは既存チャンクを削除（INSERTと同一トランザクション内）
-            if not args.append:
-                cur.execute("DELETE FROM rag.chunks WHERE collection = %s", (args.collection,))
-                print(f"  既存チャンク削除完了")
 
             for i in range(0, len(chunks), BATCH_SIZE):
                 batch = chunks[i: i + BATCH_SIZE]
