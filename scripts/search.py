@@ -54,6 +54,11 @@ def search(query: str, n: int = 5, collection: str = DEFAULT_COLLECTION):
 
 
 if __name__ == "__main__":
-    query = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "法華経"
-    results = search(query)
+    import argparse
+    p = argparse.ArgumentParser(description="RAG検索CLI")
+    p.add_argument("query", nargs="*", default=["法華経"])
+    p.add_argument("--collection", default=DEFAULT_COLLECTION, help="検索対象コレクション")
+    p.add_argument("-n", type=int, default=5, help="取得件数")
+    args = p.parse_args()
+    results = search(" ".join(args.query), args.n, args.collection)
     print(json.dumps(results, ensure_ascii=False, indent=2))

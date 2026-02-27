@@ -1,5 +1,6 @@
 #!/bin/bash
-export HOME=/Users/teddy
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+export HOME="${HOME:-/Users/teddy}"
 export APP_ROOT=/ragmyadmin
-cd /Users/teddy/rag/admin
+cd "$SCRIPT_DIR"
 exec /opt/homebrew/bin/python3 app.py
