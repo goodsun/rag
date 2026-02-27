@@ -10,6 +10,10 @@ Usage:
 import argparse
 import json
 import os
+try:
+    from dotenv import load_dotenv; load_dotenv()
+except ImportError:
+    pass
 import time
 import urllib.request
 from datetime import datetime

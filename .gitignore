@@ -26,3 +26,4 @@ test_*.py
 final_test.py
 data/raw_*/
 data/chunks_*/
+.env
