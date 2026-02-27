@@ -24,3 +24,5 @@ admin/sessions/
 *.db
 test_*.py
 final_test.py
+data/raw_*/
+data/chunks_*/

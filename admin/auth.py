@@ -63,8 +63,6 @@ def validate_password(password: str) -> tuple[bool, str]:
 
 def check_rate_limit(username, ip_address):
     """Check if user/IP has exceeded rate limit"""
-    cutoff = f'-{LOCKOUT_MINUTES} minutes'
-    
     conn = get_db()
     try:
         cur = conn.cursor()
