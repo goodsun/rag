@@ -27,7 +27,7 @@ COLLECTION_NAME = "teddy_notes"
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/embed")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
 BATCH_SIZE = 50
-DB_DSN = os.environ.get("DB_DSN", "dbname=bonsoleil user=teddy")
+DB_DSN = os.environ.get("DB_DSN", "")
 
 
 def parse_date(date_str) -> str | None:
