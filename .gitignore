@@ -2,6 +2,8 @@
 data/raw/
 data/chunks/
 chroma_db/
+documents/
+admin/sessions/
 
 # Python
 __pycache__/
@@ -11,3 +13,6 @@ venv/
 
 # OS
 .DS_Store
+.playwright-cli/
+
+.env*

@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+
+{% block title %}Add User - ragMyAdmin{% endblock %}
+
+{% block col_count %}+{% endblock %}
+
+{% block content %}
+<div class="pma-breadcrumb">
+  <a href="{{ BASE }}/">🏠 Home</a>
+  <span>›</span> 
+  <a href="{{ BASE }}/users">👥 Users</a>
+  <span>›</span>
+  ➕ Add User
+</div>
+
+<h2 class="pma-heading">➕ Add New User</h2>
+
+{% if errors %}
+<div style="background: #ffebee; border: 1px solid #f44336; padding: 10px; margin-bottom: 15px; border-radius: 3px;">
+  <strong>Validation Errors:</strong>
+  <ul style="margin: 5px 0 0 20px;">
+    {% for error in errors %}
+    <li style="color: #c62828;">{{ error }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<form method="post" id="add-user-form" style="max-width: 500px;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <table style="border: none; width: 100%;">
+    <tr>
+      <td style="border: none; padding: 8px 12px 8px 0; vertical-align: top; width: 120px;">
+        <label for="username" style="font-weight: bold;">Username:</label>
+      </td>
+      <td style="border: none; padding: 8px 0;">
+        <input type="text" id="username" name="username" value="{{ username or '' }}" 
+               required maxlength="64" 
+               pattern="[a-zA-Z0-9_.-]+"
+               style="width: 250px; padding: 6px 8px; border: 1px solid #aaa; border-radius: 3px; font-size: 13px;">
+        <div style="font-size: 11px; color: #666; margin-top: 2px;">
+          Letters, numbers, underscore, dot, hyphen only. Max 64 chars.
+        </div>
+      </td>
+    </tr>
+    
+    <tr>
+      <td style="border: none; padding: 8px 12px 8px 0; vertical-align: top;">
+        <label for="password" style="font-weight: bold;">Password:</label>
+      </td>
+      <td style="border: none; padding: 8px 0;">
+        <input type="password" id="password" name="password" 
+               required minlength="12"
+               style="width: 250px; padding: 6px 8px; border: 1px solid #aaa; border-radius: 3px; font-size: 13px;">
+        <div id="passwordHelp" style="font-size: 11px; color: #666; margin-top: 2px;">
+          Minimum 12 characters, must include: lowercase, uppercase, numbers
+        </div>
+      </td>
+    </tr>
+    
+    <tr>
+      <td style="border: none; padding: 8px 12px 8px 0; vertical-align: top;">
+        <label for="password_confirm" style="font-weight: bold;">Confirm Password:</label>
+      </td>
+      <td style="border: none; padding: 8px 0;">
+        <input type="password" id="password_confirm" name="password_confirm" 
+               required
+               style="width: 250px; padding: 6px 8px; border: 1px solid #aaa; border-radius: 3px; font-size: 13px;">
+        <div id="passwordMatchStatus" style="font-size: 11px; margin-top: 2px;"></div>
+      </td>
+    </tr>
+    
+    <tr>
+      <td style="border: none; padding: 8px 12px 8px 0; vertical-align: top;">
+        <label for="role" style="font-weight: bold;">Role:</label>
+      </td>
+      <td style="border: none; padding: 8px 0;">
+        <select id="role" name="role" 
+                style="width: 150px; padding: 6px 8px; border: 1px solid #aaa; border-radius: 3px; font-size: 13px;">
+          <option value="viewer" {% if role == 'viewer' %}selected{% endif %}>Viewer (read-only)</option>
+          <option value="editor" {% if role == 'editor' %}selected{% endif %}>Editor (read/write)</option>
+          <option value="admin" {% if role == 'admin' %}selected{% endif %}>Admin (full access)</option>
+        </select>
+      </td>
+    </tr>
+    
+    <tr>
+      <td style="border: none; padding: 8px 12px 8px 0; vertical-align: top;">
+        <label for="groups" style="font-weight: bold;">Groups:</label>
+      </td>
+      <td style="border: none; padding: 8px 0;">
+        <input type="text" id="groups" name="groups" value="{{ groups or '' }}"
+               placeholder="group1, group2, group3"
+               style="width: 250px; padding: 6px 8px; border: 1px solid #aaa; border-radius: 3px; font-size: 13px;">
+        <div style="font-size: 11px; color: #666; margin-top: 2px;">
+          Comma-separated group names (optional). Used for document permissions.
+        </div>
+      </td>
+    </tr>
+    
+    <tr>
+      <td style="border: none; padding: 20px 0 0 0;" colspan="2">
+        <button type="submit" class="pma-btn" style="padding: 8px 20px; font-size: 13px;">
+          ➕ Create User
+        </button>
+        <a href="{{ BASE }}/users" class="pma-btn" style="margin-left: 10px; padding: 8px 20px; font-size: 13px;">
+          Cancel
+        </a>
+      </td>
+    </tr>
+  </table>
+</form>
+
+<script nonce="{{ csp_nonce }}">
+(function() {
+const passwordInput = document.getElementById('password');
+const confirmInput = document.getElementById('password_confirm');
+const help = document.getElementById('passwordHelp');
+const matchStatus = document.getElementById('passwordMatchStatus');
+
+function checkPassword() {
+  const password = passwordInput.value;
+  if (password.length === 0) {
+    help.style.color = '#666';
+    help.textContent = 'Minimum 12 characters, must include: lowercase, uppercase, numbers';
+    return;
+  }
+  const failures = [];
+  if (password.length < 12) failures.push('12+ chars');
+  if (!/[a-z]/.test(password)) failures.push('lowercase');
+  if (!/[A-Z]/.test(password)) failures.push('uppercase');
+  if (!/[0-9]/.test(password)) failures.push('numbers');
+
+  if (failures.length === 0) { help.style.color = 'green'; help.textContent = '✓ Password meets requirements'; }
+  else { help.style.color = 'red'; help.textContent = '✗ Missing: ' + failures.join(', '); }
+  checkPasswordMatch();
+}
+
+function checkPasswordMatch() {
+  const confirm = confirmInput.value;
+  if (confirm.length === 0) { matchStatus.textContent = ''; return; }
+  if (passwordInput.value === confirm) { matchStatus.style.color = 'green'; matchStatus.textContent = '✓ Passwords match'; }
+  else { matchStatus.style.color = 'red'; matchStatus.textContent = '✗ Passwords do not match'; }
+}
+
+passwordInput.addEventListener('input', checkPassword);
+confirmInput.addEventListener('input', checkPasswordMatch);
+
+document.getElementById('add-user-form').addEventListener('submit', function(e) {
+  const password = passwordInput.value;
+  const confirm = confirmInput.value;
+  if (password !== confirm) { e.preventDefault(); alert('Passwords do not match'); return; }
+  if (password.length < 12) { e.preventDefault(); alert('Password must be at least 12 characters'); return; }
+  if (!/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/[0-9]/.test(password)) {
+    e.preventDefault(); alert('Password must contain lowercase, uppercase, and numbers'); return;
+  }
+});
+
+document.getElementById('username').focus();
+})();
+</script>
+
+{% endblock %}

@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}Audit Log - ragMyAdmin{% endblock %}
+
+{% block col_count %}{{ total }}{% endblock %}
+
+{% block content %}
+<div class="pma-breadcrumb">
+  <a href="{{ BASE }}/">🏠 Home</a>
+  <span>›</span> 
+  📋 Audit Log
+</div>
+
+<h2 class="pma-heading">📋 Audit Log</h2>
+
+<!-- Filters -->
+<div class="pma-search" style="margin-bottom: 15px;">
+  <form method="get">
+    <input type="text" name="username" value="{{ username_filter }}" 
+           placeholder="Filter by username" style="width: 150px;">
+    
+    <select name="action" style="width: 150px;">
+      <option value="">All actions</option>
+      {% for action in available_actions %}
+      <option value="{{ action }}" {% if action == action_filter %}selected{% endif %}>
+        {{ action }}
+      </option>
+      {% endfor %}
+    </select>
+    
+    <select name="per_page">
+      <option value="25" {% if per_page == 25 %}selected{% endif %}>25 per page</option>
+      <option value="50" {% if per_page == 50 %}selected{% endif %}>50 per page</option>
+      <option value="100" {% if per_page == 100 %}selected{% endif %}>100 per page</option>
+      <option value="200" {% if per_page == 200 %}selected{% endif %}>200 per page</option>
+    </select>
+    
+    <button type="submit" class="pma-btn">🔍 Filter</button>
+    
+    {% if username_filter or action_filter %}
+    <a href="{{ BASE }}/audit" class="pma-btn">Clear filters</a>
+    {% endif %}
+  </form>
+</div>
+
+<!-- Summary -->
+<div class="pma-notice">
+  総エントリ数: <strong>{{ total }}</strong>
+  {% if username_filter or action_filter %}
+  (全エントリからフィルタリング)
+  {% endif %}
+  
+  | ページ {{ page }}/{{ total_pages }} に {{ logs|length }} エントリを表示
+</div>
+
+<!-- Pagination (top) -->
+{% if total_pages > 1 %}
+<div class="pma-pagination">
+  {% if has_prev %}
+  <a href="?page=1&per_page={{ per_page }}&username={{ username_filter }}&action={{ action_filter }}">« First</a>
+  <a href="?page={{ page - 1 }}&per_page={{ per_page }}&username={{ username_filter }}&action={{ action_filter }}">‹ Prev</a>
+  {% endif %}
+  
+  {% for p in range([1, page - 3]|max, [total_pages, page + 3]|min + 1) %}
+    {% if p == page %}
+    <span class="current">{{ p }}</span>
+    {% else %}
+    <a href="?page={{ p }}&per_page={{ per_page }}&username={{ username_filter }}&action={{ action_filter }}">{{ p }}</a>
+    {% endif %}
+  {% endfor %}
+  
+  {% if has_next %}
+  <a href="?page={{ page + 1 }}&per_page={{ per_page }}&username={{ username_filter }}&action={{ action_filter }}">Next ›</a>
+  <a href="?page={{ total_pages }}&per_page={{ per_page }}&username={{ username_filter }}&action={{ action_filter }}">Last »</a>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- Logs table -->
+{% if logs %}
+<table class="pma-table" style="font-size: 11px;">
+  <thead>
+    <tr>
+      <th style="width: 130px;">Timestamp</th>
+      <th style="width: 100px;">Username</th>
+      <th style="width: 120px;">Action</th>
+      <th style="width: 100px;">Target</th>
+      <th>Detail</th>
+      <th style="width: 100px;">IP Address</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for log in logs %}
+    <tr>
+      <td style="white-space: nowrap; font-family: monospace;">{{ log.created_at }}</td>
+      <td>
+        <strong>{{ log.username }}</strong>
+      </td>
+      <td>
+        <code style="font-size: 10px; background: 
+          {% if log.action.startswith('login') %}#e8f5e8{% 
+          elif log.action.startswith('user_') %}#fff3e0{% 
+          elif log.action.startswith('admin_') %}#ffebee{% 
+          else %}#f0f0f0{% endif %};">
+          {{ log.action }}
+        </code>
+      </td>
+      <td style="word-break: break-word;">
+        {% if log.target %}{{ log.target }}{% endif %}
+      </td>
+      <td class="truncate">
+        {% if log.detail_parsed %}
+          {% if log.detail_parsed.target_user %}
+            👤 <strong>{{ log.detail_parsed.target_user }}</strong>
+            {% if log.detail_parsed.old_role and log.detail_parsed.new_role %}
+              | {{ log.detail_parsed.old_role }} → {{ log.detail_parsed.new_role }}
+            {% endif %}
+            {% if log.detail_parsed.role %}
+              | Role: {{ log.detail_parsed.role }}
+            {% endif %}
+            {% if log.detail_parsed.groups %}
+              | Groups: {{ log.detail_parsed.groups }}
+            {% endif %}
+          {% elif log.detail_parsed.collection %}
+            📁 {{ log.detail_parsed.collection }}
+          {% elif log.detail_parsed.chunk_id %}
+            📄 Chunk: {{ log.detail_parsed.chunk_id }}
+          {% else %}
+            {{ log.detail_parsed|tojson if log.detail_parsed != {'raw': log.detail} else log.detail }}
+          {% endif %}
+        {% elif log.detail %}
+          {{ log.detail }}
+        {% endif %}
+      </td>
+      <td style="font-family: monospace; font-size: 10px;">
+        {% if log.ip_address %}{{ log.ip_address }}{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">
+  監査ログエントリが見つかりません
+  {% if username_filter or action_filter %} matching your filters{% endif %}.
+</div>
+{% endif %}
+
+<!-- Pagination (bottom) -->
+{% if total_pages > 1 %}
+<div class="pma-pagination">
+  {% if has_prev %}
+  <a href="?page=1&per_page={{ per_page }}&username={{ username_filter }}&action={{ action_filter }}">« First</a>
+  <a href="?page={{ page - 1 }}&per_page={{ per_page }}&username={{ username_filter }}&action={{ action_filter }}">‹ Prev</a>
+  {% endif %}
+  
+  {% for p in range([1, page - 3]|max, [total_pages, page + 3]|min + 1) %}
+    {% if p == page %}
+    <span class="current">{{ p }}</span>
+    {% else %}
+    <a href="?page={{ p }}&per_page={{ per_page }}&username={{ username_filter }}&action={{ action_filter }}">{{ p }}</a>
+    {% endif %}
+  {% endfor %}
+  
+  {% if has_next %}
+  <a href="?page={{ page + 1 }}&per_page={{ per_page }}&username={{ username_filter }}&action={{ action_filter }}">Next ›</a>
+  <a href="?page={{ total_pages }}&per_page={{ per_page }}&username={{ username_filter }}&action={{ action_filter }}">Last »</a>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- Legend -->
+<div style="margin-top: 20px; padding: 10px; background: #f5f5f5; border: 1px solid #ddd; border-radius: 3px; font-size: 11px;">
+  <strong>Action Color Coding:</strong>
+  <code style="background: #e8f5e8; padding: 2px 4px; margin: 0 5px;">login_*</code> Authentication
+  <code style="background: #fff3e0; padding: 2px 4px; margin: 0 5px;">user_*</code> User Changes
+  <code style="background: #ffebee; padding: 2px 4px; margin: 0 5px;">admin_*</code> Admin Actions
+</div>
+
+<script nonce="{{ csp_nonce }}">
+// Auto-refresh page every 60 seconds if on first page with no filters
+{% if page == 1 and not username_filter and not action_filter %}
+setTimeout(() => {
+  location.reload();
+}, 60000);
+{% endif %}
+</script>
+
+{% endblock %}
